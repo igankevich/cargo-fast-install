@@ -10,4 +10,7 @@ EOF
 chmod +x $HOME/.cargo/bin/cargo-fast-install
 export PATHEXT="$PATHEXT:.PY"
 export PATH="$HOME/.cargo/bin:$PATH"
+if test "$RUNNER_OS" = "Windows"; then
+    mv -v "$HOME"/.cargo/bin/cargo-fast-install "$HOME"/.cargo/bin/cargo-fast-install.py
+fi
 cargo fast-install --version
