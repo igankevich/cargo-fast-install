@@ -1,6 +1,5 @@
 #!/bin/sh
 set -ex
-git config --local core.autocrlf false
 commit="$(git rev-parse HEAD)"
 sha256="$(sha256sum cargo-fast-install | awk '{ print $1 }')"
 mkdir -p "$HOME"/.cargo/bin

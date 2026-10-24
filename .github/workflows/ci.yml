@@ -33,6 +33,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with: 
+          autocrlf: false
       - name: Test
         shell: bash
         run: ./test.sh
