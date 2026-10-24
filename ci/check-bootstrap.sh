@@ -8,9 +8,6 @@ sha256sum -c - <<EOF
 $sha256  $HOME/.cargo/bin/cargo-fast-install
 EOF
 chmod +x $HOME/.cargo/bin/cargo-fast-install
-export PATHEXT="$PATHEXT:.PY"
-export PATH="$HOME/.cargo/bin:$PATH"
-if test "$RUNNER_OS" = "Windows"; then
-    mv -v "$HOME"/.cargo/bin/cargo-fast-install "$HOME"/.cargo/bin/cargo-fast-install.py
-fi
-cargo fast-install --version
+cargo-fast-install --version | tee /tmp/version1
+./cargo-fast-install --version | tee /tmp/version2
+diff /tmp/version1 /tmp/version2
