@@ -773,6 +773,9 @@ def find_crate_binaries(crates, target_dir, target, args):
                 target_dir / args.profile / name,
                 target_dir / target / args.profile / name,
             ]
+            if platform.system().lower() == "windows":
+                for path in paths:
+                    path += ".exe"
             found = None
             for path in paths:
                 if path.is_file() and os.access(path, os.X_OK):
@@ -783,8 +786,8 @@ def find_crate_binaries(crates, target_dir, target, args):
                     found = path
             if found is None:
                 raise Exception(
-                    f"Binary {colorize(name, Syntax.NAME)} not found; \
-                    tried {colorize(paths[0], Syntax.PATH)} and {colorize(paths[1], Syntax.PATH)}"
+                    f"Binary {colorize(name, Syntax.NAME)} not found; "
+                    f"tried {colorize(paths[0], Syntax.PATH)} and {colorize(paths[1], Syntax.PATH)}"
                 )
             crate.files.append(found)
         crate.files.sort()
