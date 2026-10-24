@@ -8,4 +8,6 @@ sha256sum -c - <<EOF
 $sha256  $HOME/.cargo/bin/cargo-fast-install
 EOF
 chmod +x $HOME/.cargo/bin/cargo-fast-install
+export PATHEXT="$PATHEXT:.PY"
+export PATH="$HOME/.cargo/bin:$PATH"
 cargo fast-install --version
