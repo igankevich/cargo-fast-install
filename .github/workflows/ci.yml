@@ -31,10 +31,10 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
+      - name: Prepare git
+        run: git config --global core.autocrlf false
       - name: Checkout
         uses: actions/checkout@v7
-        with: 
-          autocrlf: false
       - name: Test
         shell: bash
         run: ./test.sh
