@@ -34,16 +34,17 @@ generate_package() {
     cd "$workdir"/mycrate
     cargo init --bin
     cargo build --release
-    cargo fast-install --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
+    cargo-fast-install --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
     mv *.tar.gz "$workdir"/http/binaries
     cargo package --allow-dirty
     cksum="$(sha256sum target/package/mycrate-0.1.0.crate | awk '{ print $1 }')"
-    install -D target/package/mycrate-0.1.0.crate "$workdir"/http/crates/mycrate/0.1.0/download
+    mkdir -p "$workdir"/http/crates/mycrate/0.1.0
+    cp target/package/mycrate-0.1.0.crate "$workdir"/http/crates/mycrate/0.1.0/download
     mkdir -p "$workdir"/http/registry/my/cr
     cat >"$workdir"/http/registry/my/cr/mycrate <<EOF
 {"name":"mycrate","vers":"0.1.0","deps":[],"cksum":"$cksum","features":{},"yanked":false,"pubtime":"2026-09-17T21:00:56Z"}
 EOF
-    cargo fast-install mycrate
+    cargo-fast-install mycrate
 }
 
 cleanup() {
