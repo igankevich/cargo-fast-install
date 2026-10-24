@@ -543,9 +543,7 @@ def download_archives_metadata(candidate, crate, registry, args):
             f"❌ {filename} checksum mismatch:\n  expected {candidate.cksum}\n    actual {actual_cksum}"
         )
     if args.verbose:
-        print(
-            f"Verified {colorize(filename, Syntax.PATH)} checksum", file=sys.stderr
-        )
+        print(f"Verified {colorize(filename, Syntax.PATH)} checksum", file=sys.stderr)
     config = None
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
         for member in tar.getmembers():
@@ -625,7 +623,9 @@ def install_binaries(candidates, target, args):
     binaries = []
     remaining_binaries = args.binaries
     for archive in candidates:
-        binaries_str = ", ".join([colorize(str(binary), Syntax.NAME) for binary in archive.binaries])
+        binaries_str = ", ".join(
+            [colorize(str(binary), Syntax.NAME) for binary in archive.binaries]
+        )
         if args.verbose:
             print(
                 f"Downloading {binaries_str} from {colorize(archive.url, Syntax.URL)}",
@@ -783,7 +783,8 @@ def find_crate_binaries(crates, target_dir, target, args):
                     found = path
             if found is None:
                 raise Exception(
-                    f"Binary {name} not found; tried {paths[0]} and {paths[1]}"
+                    f"Binary {colorize(name, Syntax.NAME)} not found; \
+                    tried {colorize(paths[0], Syntax.PATH)} and {colorize(paths[1], Syntax.PATH)}"
                 )
             crate.files.append(found)
         crate.files.sort()
