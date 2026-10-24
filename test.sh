@@ -6,9 +6,6 @@ main() {
     root="$PWD"
     trap cleanup EXIT
     export PATH="$PWD:$PATH"
-    cp cargo-fast-install cargo-fast-install.py
-    echo "PATHEXT = $PATHEXT"
-    ls -l
     spawn_local_registry
     generate_package
 }
@@ -37,7 +34,7 @@ generate_package() {
     cd "$workdir"/mycrate
     cargo init --bin
     cargo build --release
-    cargo fast-install --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
+    cargo-fast-install --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
     mv *.tar.gz "$workdir"/http/binaries
     cargo package --allow-dirty
     cksum="$(sha256sum target/package/mycrate-0.1.0.crate | awk '{ print $1 }')"
@@ -47,7 +44,7 @@ generate_package() {
     cat >"$workdir"/http/registry/my/cr/mycrate <<EOF
 {"name":"mycrate","vers":"0.1.0","deps":[],"cksum":"$cksum","features":{},"yanked":false,"pubtime":"2026-09-17T21:00:56Z"}
 EOF
-    cargo fast-install mycrate
+    cargo-fast-install mycrate
 }
 
 cleanup() {
