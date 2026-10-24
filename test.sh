@@ -34,7 +34,6 @@ generate_package() {
     cd "$workdir"/mycrate
     cargo init --bin
     cargo build --release
-    find
     cargo-fast-install --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
     mv *.tar.gz "$workdir"/http/binaries
     cargo package --allow-dirty
