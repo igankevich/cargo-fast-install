@@ -774,8 +774,7 @@ def find_crate_binaries(crates, target_dir, target, args):
                 target_dir / target / args.profile / name,
             ]
             if platform.system().lower() == "windows":
-                for path in paths:
-                    path = path.with_suffix(".exe")
+                paths = [path.with_suffix(".exe") for path in paths]
             found = None
             for path in paths:
                 if path.is_file() and os.access(path, os.X_OK):
