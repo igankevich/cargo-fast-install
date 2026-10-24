@@ -17,6 +17,8 @@ jobs:
         uses: actions/checkout@v7
       - name: Test
         run: ./test.sh
+      - name: Check bootstrap command
+        run: ./check-bootstrap.sh
   macos:
     runs-on: macos-latest
     steps:
@@ -24,6 +26,8 @@ jobs:
         uses: actions/checkout@v7
       - name: Test
         run: ./test.sh
+      - name: Check bootstrap command
+        run: ./check-bootstrap.sh
   windows:
     runs-on: windows-latest
     steps:
@@ -32,3 +36,6 @@ jobs:
       - name: Test
         shell: bash
         run: ./test.sh
+      - name: Check bootstrap command
+        shell: bash
+        run: ./check-bootstrap.sh
