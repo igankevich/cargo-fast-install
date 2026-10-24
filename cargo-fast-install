@@ -323,6 +323,7 @@ class Syntax(Enum):
     URL = 1
     PATH = 2
     HASH = 3
+    ERROR = 4
 
 
 def colorize(string, kind):
@@ -331,6 +332,8 @@ def colorize(string, kind):
     match kind:
         case Syntax.NAME | Syntax.URL | Syntax.PATH | Syntax.HASH:
             return f"\x1b[34m{string}\x1b[0m"
+        case Syntax.ERROR:
+            return f"\x1b[1;31m{string}\x1b[0m"
         case _:
             return string
 
@@ -572,7 +575,8 @@ def download_archives_metadata(candidate, crate, registry, args):
 
 
 def extract_binaries_from_tar_archive(data, binaries, archive_file_name):
-    binaries_map = dict([[binary.name, binary] for binary in binaries])
+    suffix = ".exe" if platform.system().lower() == "windows" else ""
+    binaries_map = dict([[binary.name + suffix, binary] for binary in binaries])
     extracted_files = {}
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
         for member in tar.getmembers():
@@ -672,7 +676,7 @@ def install_binaries(candidates, target, args):
                 remaining_binaries.remove(binary)
         except Exception as e:
             print(
-                f"❌ Failed to download {colorize(archive.url, Syntax.URL)} and install {binaries_str}",
+                f"{colorize("Error: ", Syntax.ERROR)}Failed to download {colorize(archive.url, Syntax.URL)} and install {binaries_str}: {e}",
                 file=sys.stderr,
             )
             continue
@@ -889,7 +893,7 @@ def main():
             case "generate":
                 generate_archives(args)
     except Exception as e:
-        print(f"{e}", file=sys.stderr)
+        print(f"{colorize("Error: ", Syntax.ERROR)}{e}", file=sys.stderr)
         sys.exit(1)
 
 
