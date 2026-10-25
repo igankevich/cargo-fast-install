@@ -393,6 +393,11 @@ def parse_install_arguments():
         "-q", "--quiet", action="store_true", help="Produce less output"
     )
     parser.add_argument("--version", action="store_true", help="Print script file hash")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Don't install the binary, but print the command to reproduce the installation",
+    )
     args = parser.parse_args()
     if args.crates is None:
         args.crates = [
@@ -511,7 +516,7 @@ def find_installation_candidate(crate, registry, now, args):
         if pubtime > now or pubtime + args.min_age > now:
             if version_matches or checksum_matches:
                 print(
-                    f"Crate {crate} was published more than {args.min_age.days} day(s) ago",
+                    f"Crate {crate} was published less than {args.min_age.days} day(s) ago",
                     file=sys.stderr,
                 )
             continue
@@ -526,7 +531,7 @@ def find_installation_candidate(crate, registry, now, args):
         elif crate.checksum is not None:
             message = f"Failed to find {crate.name} with checksum {crate.checksum}"
         else:
-            message = f"All available {crate.name} versions were either yanked or published more than {args.min_age.days} day(s) ago"
+            message = f"All available {crate.name} versions were either yanked or published less than {args.min_age.days} day(s) ago"
         raise Exception(message)
     return candidates[-1]
 
@@ -655,24 +660,26 @@ def install_binaries(candidates, target, args):
             extracted_files = extract_binaries_from_tar_archive(
                 data, archive.binaries, archive_file_name
             )
-            cargo_bin.mkdir(parents=True, exist_ok=True)
+            if not args.dry_run:
+                cargo_bin.mkdir(parents=True, exist_ok=True)
             crates.append(f"--crate {archive.crate.name}@{archive.crate.cksum}")
             for binary, data in extracted_files.items():
-                file_name = binary.name
-                tmp_target_file = cargo_bin / f".{file_name}.tmp"
-                with open(tmp_target_file, "wb") as file:
-                    file.write(data)
-                    file.flush()
-                    os.fsync(file.fileno())
-                target_file = cargo_bin / file_name
-                target_file.unlink(missing_ok=True)
-                tmp_target_file.rename(target_file)
-                target_file.chmod(0o755)
-                if args.verbose:
-                    print(
-                        f"Installed {colorize(file_name, Syntax.PATH)} as {colorize(target_file, Syntax.PATH)}",
-                        file=sys.stderr,
-                    )
+                if not args.dry_run:
+                    file_name = binary.name
+                    tmp_target_file = cargo_bin / f".{file_name}.tmp"
+                    with open(tmp_target_file, "wb") as file:
+                        file.write(data)
+                        file.flush()
+                        os.fsync(file.fileno())
+                    target_file = cargo_bin / file_name
+                    target_file.unlink(missing_ok=True)
+                    tmp_target_file.rename(target_file)
+                    target_file.chmod(0o755)
+                    if args.verbose:
+                        print(
+                            f"Installed {colorize(file_name, Syntax.PATH)} as {colorize(target_file, Syntax.PATH)}",
+                            file=sys.stderr,
+                        )
                 binaries.append(str(binary))
                 remaining_binaries.remove(binary)
         except Exception as e:
@@ -686,7 +693,7 @@ def install_binaries(candidates, target, args):
     if not len(remaining_binaries) == 0:
         remaining_str = ", ".join([str(binary) for binary in remaining_binaries])
         raise Exception(f"The following binaries failed to install: {remaining_str}")
-    if args.verbose:
+    if args.verbose or args.dry_run:
         print(
             "🎉 Done!\n\nUse the following command to reproduce the installation:\n",
             file=sys.stderr,
