@@ -9,7 +9,6 @@ import io
 import json
 import os
 import platform
-import shutil
 import string
 import subprocess
 import sys
@@ -19,8 +18,7 @@ import urllib.request
 from datetime import timedelta, datetime, UTC
 from enum import Enum
 from pathlib import Path
-from types import SimpleNamespace, FunctionType
-from urllib.parse import urlsplit
+from types import SimpleNamespace
 
 REPO_FILE_NAME = "cargo-fast-install.jsonl"
 
@@ -144,20 +142,20 @@ class ArchiveSpec:
 def parse_archive_spec(json_object, crate):
     def get_string(json_object, key):
         value = json_object.get(key)
-        if not type(value) == str:
-            raise Exception(f"Invalid archive spec")
+        if type(value) is not str:
+            raise Exception("Invalid archive spec")
         return value
 
     def get_optinoal_string(json_object, key):
         value = json_object.get(key)
-        if value is not None and not type(value) == str:
-            raise Exception(f"Invalid archive spec")
+        if value is not None and type(value) is not str:
+            raise Exception("Invalid archive spec")
         return value
 
     def get_string_list(json_object, key):
         value = json_object.get(key)
-        if not type(value) == list or not all(type(x) == str for x in value):
-            raise Exception(f"Invalid archive spec")
+        if type(value) is not list or not all(type(x) is str for x in value):
+            raise Exception("Invalid archive spec")
         return value
 
     variant = get_optinoal_string(json_object, "variant")
@@ -640,7 +638,7 @@ def extract_binaries_from_tar_archive(data, binaries, archive_file_name):
 
 
 def select_binaries(all_archives, target, args):
-    all_archive = [
+    all_archives = [
         archive
         for archive in all_archives
         if archive.target == target and not archive.binaries.isdisjoint(args.binaries)
@@ -796,9 +794,9 @@ def cargo_workspace_binaries(args):
     for package in metadata["packages"]:
         binaries = []
         for target in package["targets"]:
-            if not "bin" in target["kind"]:
+            if "bin" not in target["kind"]:
                 continue
-            if not "bin" in target["crate_types"]:
+            if "bin" not in target["crate_types"]:
                 continue
             binaries.append(target["name"])
         if not len(binaries) == 0:
@@ -889,10 +887,10 @@ def generate_archives(args):
     for archive_name, archive in archives.items():
         extension = archive_name.split(".")[-1]
         if not extension == "gz":
-            raise Exception(f"Only tar.gz archives are currently supported")
+            raise Exception("Only tar.gz archives are currently supported")
         archive_path = Path(archive_name)
         with gzip.GzipFile(archive_path, "wb", mtime=0, compresslevel=9) as gzip_file:
-            with tarfile.open(fileobj=gzip_file, mode=f"w:") as tar:
+            with tarfile.open(fileobj=gzip_file, mode="w:") as tar:
                 for crate in archive.crates:
                     for path in crate.files:
                         metadata = tarfile.TarInfo(name=path.name)
