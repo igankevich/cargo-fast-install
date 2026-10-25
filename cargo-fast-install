@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 import argparse
+import gzip
 import hashlib
 import io
 import json
@@ -841,15 +842,11 @@ def generate_archives(args):
     archive_specs = []
     for archive_name, archive in archives.items():
         extension = archive_name.split(".")[-1]
-        options = {}
-        match extension:
-            case "gz":
-                options["compresslevel"] = 9
+        if not extension == "gz":
+            raise Exception(f"Only tar.gz archives are currently supported")
         archive_path = Path(archive_name)
-        with open(archive_path, "wb") as tar_file:
-            with tarfile.open(
-                fileobj=tar_file, mode=f"w:{extension}", **options
-            ) as tar:
+        with gzip.GzipFile(archive_path, "wb", mtime=0, compresslevel=9) as gzip_file:
+            with tarfile.open(fileobj=gzip_file, mode=f"w:") as tar:
                 for crate in archive.crates:
                     for path in crate.files:
                         metadata = tarfile.TarInfo(name=path.name)

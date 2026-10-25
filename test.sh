@@ -35,6 +35,10 @@ generate_package() {
     cargo init --bin
     cargo build --release
     cargo-fast-install --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
+    sha256sum cargo-fast-install.jsonl >"$workdir"/CHECKSUM
+    sleep 1
+    cargo-fast-install --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
+    sha256sum --check "$workdir"/CHECKSUM
     mv *.tar.gz "$workdir"/http/binaries
     cargo package --allow-dirty
     cksum="$(sha256sum target/package/mycrate-0.1.0.crate | awk '{ print $1 }')"
