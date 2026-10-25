@@ -4,6 +4,7 @@ main() {
     set -ex
     install_ruff
     check_with_ruff
+    check_with_mypy
 }
 
 install_ruff() {
@@ -18,6 +19,12 @@ EOF
 
 check_with_ruff() {
     ruff check cargo-fast-install
+    ruff format check cargo-fast-install
+}
+
+check_with_mypy() {
+    pip install mypy
+    mypy cargo-fast-install
 }
 
 main

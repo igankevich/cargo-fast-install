@@ -24,6 +24,10 @@ REPO_FILE_NAME = "cargo-fast-install.jsonl"
 
 
 class CrateSpec:
+    name: str
+    version: str
+    checksum: str
+
     def __init__(self, name, version, checksum):
         self.name = name
         self.version = version
@@ -48,7 +52,7 @@ def parse_crate_spec(spec):
     if any(len(part) == 0 for part in parts):
         raise Exception(
             f"Invalid crate spec: {colorize(spec, Syntax.NAME)}; "
-            f"expected {colorize("NAME[@VERSION_OR_HASH]", Syntax.NAME)}"
+            f"expected {colorize('NAME[@VERSION_OR_HASH]', Syntax.NAME)}"
         )
     if len(parts) == 2:
         name = parts[0]
@@ -66,6 +70,9 @@ def parse_crate_spec(spec):
 
 
 class BinarySpec:
+    name: str
+    variant: str | None
+
     def __init__(self, name, variant):
         self.name = name
         self.variant = variant
@@ -95,7 +102,7 @@ def parse_binary_spec(spec):
     if any(len(part) == 0 for part in parts):
         raise Exception(
             f"Invalid binary spec: {colorize(spec, Syntax.NAME)}; "
-            f"expected {colorize("NAME[:VARIANT]", Syntax.NAME)}"
+            f"expected {colorize('NAME[:VARIANT]', Syntax.NAME)}"
         )
     if len(parts) == 2:
         name = parts[0]
@@ -107,6 +114,11 @@ def parse_binary_spec(spec):
 
 
 class ArchiveSpec:
+    target: str
+    hash: str
+    url: str
+    binaries: list[BinarySpec]
+
     def __init__(self, target, hash, url, binaries, crate):
         if len(binaries) == 0:
             raise Exception("Archive with no binaries is not allowed")
@@ -115,7 +127,7 @@ class ArchiveSpec:
             variants.add(binary.variant)
         if len(variants) > 1:
             raise Exception(
-                f"Only one binary variant per archive is allowed; got {", ".join(colorize(variants, Syntax.NAME))}"
+                f"Only one binary variant per archive is allowed; got {', '.join(colorize(variants, Syntax.NAME))}"
             )
         self.target = target
         self.hash = hash
@@ -123,7 +135,7 @@ class ArchiveSpec:
         self.binaries = binaries
         self.crate = crate
 
-    def to_json(self):
+    def to_json(self) -> str:
         json_object = {
             "target": self.target,
             "binaries": [binary.name for binary in self.binaries],
@@ -139,20 +151,20 @@ class ArchiveSpec:
         return json.dumps(json_object, sort_keys=True, separators=(",", ":"))
 
 
-def parse_archive_spec(json_object, crate):
-    def get_string(json_object, key):
+def parse_archive_spec(json_object, crate) -> ArchiveSpec:
+    def get_string(json_object, key) -> str:
         value = json_object.get(key)
         if type(value) is not str:
             raise Exception("Invalid archive spec")
         return value
 
-    def get_optinoal_string(json_object, key):
+    def get_optinoal_string(json_object, key) -> str | None:
         value = json_object.get(key)
         if value is not None and type(value) is not str:
             raise Exception("Invalid archive spec")
         return value
 
-    def get_string_list(json_object, key):
+    def get_string_list(json_object, key) -> list[str]:
         value = json_object.get(key)
         if type(value) is not list or not all(type(x) is str for x in value):
             raise Exception("Invalid archive spec")
@@ -173,15 +185,15 @@ def parse_archive_spec(json_object, crate):
     )
 
 
-def blake2b(data):
+def blake2b(data) -> str:
     return hashlib.blake2b(data).hexdigest()[:64]
 
 
-def is_hash(s):
+def is_hash(s) -> bool:
     return len(s) == 64 and all(ch in string.hexdigits for ch in s)
 
 
-def is_sha256(s):
+def is_sha256(s) -> bool:
     return len(s) == 64 and all(ch in string.hexdigits for ch in s)
 
 
@@ -207,10 +219,10 @@ class CargoRegistry:
         self.base_url = base_url
         self.config = fetch_registry_config(base_url)
 
-    def get_metadata_url(self, crate_name):
+    def get_metadata_url(self, crate_name) -> str:
         return f"{self.base_url}/{get_crate_prefix(crate_name)}"
 
-    def get_download_url(self, crate):
+    def get_download_url(self, crate) -> str:
         # https://doc.rust-lang.org/cargo/reference/registry-index.html
         prefix = get_crate_prefix(crate.name)
         markers = {
@@ -231,7 +243,7 @@ class CargoRegistry:
         return url
 
 
-def get_crate_prefix(name):
+def get_crate_prefix(name) -> str:
     match len(name):
         case 0:
             raise Exception("Empty crate name")
@@ -245,18 +257,14 @@ def get_crate_prefix(name):
             return f"{name[:2]}/{name[2:4]}/{name}"
 
 
-def crates_io_download_url(crate, version):
-    return f"https://crates.io/api/v1/crates/{crate}/{version}/download"
-
-
-def is_config_file(path):
+def is_config_file(path) -> bool:
     return (
         not path.is_absolute() and len(path.parts) == 2 and path.name == REPO_FILE_NAME
     )
 
 
-def guess_rust_host_target_triple():
-    def rust_arch():
+def guess_rust_host_target_triple() -> str:
+    def rust_arch() -> str:
         match platform.machine().lower():
             case "amd64" | "x86_64":
                 return "x86_64"
@@ -280,7 +288,7 @@ def guess_rust_host_target_triple():
             return f"{arch}-unknown-{system}"
 
 
-def rust_host_target_triple():
+def rust_host_target_triple() -> str:
     try:
         result = subprocess.run(
             ["rustc", "--print", "host-tuple"],
@@ -293,7 +301,7 @@ def rust_host_target_triple():
         return guess_rust_host_target_triple()
 
 
-def get_cargo_home():
+def get_cargo_home() -> str:
     cargo_home = os.environ.get("CARGO_HOME", None)
     if cargo_home is None:
         home = os.environ.get("HOME", None)
@@ -317,7 +325,7 @@ def parse_duration(s):
 script_hash = None
 
 
-def get_script_hash():
+def get_script_hash() -> str:
     global script_hash
     if script_hash is None:
         with open(sys.argv[0], "rb") as file:
@@ -336,7 +344,7 @@ class Syntax(Enum):
     CODE = 7
 
 
-def colorize(string, kind):
+def colorize(string, kind) -> str:
     if not sys.stderr.isatty() and os.environ.get("CI") is None:
         return string
     match kind:
@@ -353,11 +361,11 @@ def colorize(string, kind):
 
 
 def log_error(message):
-    print(f"{colorize("Error: ", Syntax.ERROR)}{message}", file=sys.stderr)
+    print(f"{colorize('Error: ', Syntax.ERROR)}{message}", file=sys.stderr)
 
 
 def log_warning(message):
-    print(f"{colorize("Warning: ", Syntax.WARNING)}{message}", file=sys.stderr)
+    print(f"{colorize('Warning: ', Syntax.WARNING)}{message}", file=sys.stderr)
 
 
 def get_user_agent():
@@ -777,7 +785,7 @@ class CargoPackage:
             case _:
                 append = True
         if append:
-            s += f" ({", ".join(self.binaries)})"
+            s += f" ({', '.join(self.binaries)})"
         return s
 
 
@@ -848,7 +856,9 @@ def group_crates_into_archives(crates, target, args):
             try:
                 url = args.url.format(crate=crate, target=target)
             except Exception as e:
-                raise Exception(f"Failed to interpolate {colorize(args.url, Syntax.CODE)}: {e}")
+                raise Exception(
+                    f"Failed to interpolate {colorize(args.url, Syntax.CODE)}: {e}"
+                )
         if args.archive_name is None:
             archive_name = url.split("/")[-1]
         else:
@@ -881,7 +891,7 @@ def generate_archives(args):
     if args.verbose:
         print(f"Target: {target}", file=sys.stderr)
         print(f"Profile: {args.profile}", file=sys.stderr)
-        print(f"Crates: {", ".join([str(crate) for crate in crates])}", file=sys.stderr)
+        print(f"Crates: {', '.join([str(crate) for crate in crates])}", file=sys.stderr)
     archives = group_crates_into_archives(crates, target, args)
     archive_specs = []
     for archive_name, archive in archives.items():
