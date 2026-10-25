@@ -10,11 +10,26 @@ concurrency:
     }}
   cancel-in-progress: true
 jobs:
-  ubuntu:
+  check:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Check
+        run: ./ci/check.sh
+  ubuntu:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.15", "3.14", "3.13", "3.12", "3.11", "3.10"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          check-latest: false
       - name: Test
         run: ./test.sh
       - name: Check bootstrap command
