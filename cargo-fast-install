@@ -300,17 +300,17 @@ def rust_host_target_triple() -> str:
         return guess_rust_host_target_triple()
 
 
-def get_cargo_home() -> str:
-    cargo_home = os.environ.get("CARGO_HOME", None)
-    if cargo_home is None:
-        home = os.environ.get("HOME", None)
-        if home is None:
+def get_cargo_home() -> Path:
+    cargo_home_str = os.environ.get("CARGO_HOME", None)
+    if cargo_home_str is None:
+        home_str = os.environ.get("HOME", None)
+        if home_str is None:
             home = Path.home()
         else:
-            home = Path(home)
+            home = Path(home_str)
         cargo_home = home / ".cargo"
     else:
-        cargo_home = Path(cargo_home)
+        cargo_home = Path(cargo_home_str)
     return cargo_home
 
 
