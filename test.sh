@@ -6,6 +6,7 @@ main() {
     root="$PWD"
     trap cleanup EXIT
     export PATH="$PWD:$PATH"
+    python3 --version
     spawn_local_registry
     run_test test_normal_package
     run_test test_normal_package_with_variant

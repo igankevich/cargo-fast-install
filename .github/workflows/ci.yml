@@ -19,9 +19,16 @@ jobs:
         run: ./ci/check.sh
   ubuntu:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.16", "3.15", "3.14", "3.13", "3.12", "3.11", "3.10"]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
       - name: Test
         run: ./test.sh
       - name: Check bootstrap command

@@ -2,6 +2,7 @@
 
 main() {
     set -ex
+    python3 --version
     install_ruff
     check_with_ruff
     check_with_mypy
