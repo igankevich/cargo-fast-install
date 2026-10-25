@@ -14,7 +14,7 @@ install_ruff() {
 d6407f429ef15e558cbe980d30a67f27d02e3d2f72780be141ee006b2fdf7df3  $file.tar.gz
 EOF
     tar xf "$file".tar.gz
-    install -t ~/.local/bin/ -m755 "$file"/ruff
+    install -D -t ~/.local/bin -m755 "$file"/ruff
 }
 
 check_with_ruff() {
