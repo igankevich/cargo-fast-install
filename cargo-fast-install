@@ -14,13 +14,16 @@ import subprocess
 import sys
 import tarfile
 import urllib.request
-
-from datetime import timedelta, datetime, UTC
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
 
 REPO_FILE_NAME = "cargo-fast-install.jsonl"
+
+
+class Error(Exception):
+    pass
 
 
 class CrateSpec:
@@ -33,7 +36,7 @@ class CrateSpec:
         self.version = version
         self.checksum = checksum
 
-    def __str__(self):
+    def __str__(self) -> str:
         s = self.name
         if self.version is not None:
             s += "@"
@@ -43,14 +46,14 @@ class CrateSpec:
             s += self.checksum
         return s
 
-    def __lt__(self, other):
-        self.__str__() < other.__str__()
+    def __lt__(self, other) -> bool:
+        return self.__str__() < other.__str__()
 
 
 def parse_crate_spec(spec):
     parts = [part.strip() for part in spec.split("@")]
     if any(len(part) == 0 for part in parts):
-        raise Exception(
+        raise Error(
             f"Invalid crate spec: {colorize(spec, Syntax.NAME)}; "
             f"expected {colorize('NAME[@VERSION_OR_HASH]', Syntax.NAME)}"
         )
@@ -84,23 +87,23 @@ class BinarySpec:
             s += self.variant
         return s
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.__str__()
 
     def __hash__(self):
         return hash((self.name, self.variant))
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         return (self.name, self.variant) == (other.name, other.variant)
 
-    def __lt__(self, other):
-        self.__str__() < other.__str__()
+    def __lt__(self, other) -> bool:
+        return self.__str__() < other.__str__()
 
 
 def parse_binary_spec(spec):
     parts = [part.strip() for part in spec.split(":")]
     if any(len(part) == 0 for part in parts):
-        raise Exception(
+        raise Error(
             f"Invalid binary spec: {colorize(spec, Syntax.NAME)}; "
             f"expected {colorize('NAME[:VARIANT]', Syntax.NAME)}"
         )
@@ -121,12 +124,12 @@ class ArchiveSpec:
 
     def __init__(self, target, hash, url, binaries, crate):
         if len(binaries) == 0:
-            raise Exception("Archive with no binaries is not allowed")
+            raise Error("Archive with no binaries is not allowed")
         variants = set()
         for binary in binaries:
             variants.add(binary.variant)
         if len(variants) > 1:
-            raise Exception(
+            raise Error(
                 f"Only one binary variant per archive is allowed; got {', '.join(colorize(variants, Syntax.NAME))}"
             )
         self.target = target
@@ -155,29 +158,27 @@ def parse_archive_spec(json_object, crate) -> ArchiveSpec:
     def get_string(json_object, key) -> str:
         value = json_object.get(key)
         if type(value) is not str:
-            raise Exception("Invalid archive spec")
+            raise Error("Invalid archive spec")
         return value
 
     def get_optinoal_string(json_object, key) -> str | None:
         value = json_object.get(key)
         if value is not None and type(value) is not str:
-            raise Exception("Invalid archive spec")
+            raise Error("Invalid archive spec")
         return value
 
     def get_string_list(json_object, key) -> list[str]:
         value = json_object.get(key)
         if type(value) is not list or not all(type(x) is str for x in value):
-            raise Exception("Invalid archive spec")
+            raise Error("Invalid archive spec")
         return value
 
     variant = get_optinoal_string(json_object, "variant")
     return ArchiveSpec(
-        binaries=set(
-            [
-                BinarySpec(name, variant=variant)
-                for name in get_string_list(json_object, "binaries")
-            ]
-        ),
+        binaries={
+            BinarySpec(name, variant=variant)
+            for name in get_string_list(json_object, "binaries")
+        },
         target=get_string(json_object, "target"),
         hash=get_string(json_object, "hash"),
         url=get_string(json_object, "url"),
@@ -204,11 +205,9 @@ def fetch_registry_config(base_url):
             data = response.read().decode("utf-8")
             config = json.loads(data, object_hook=lambda d: SimpleNamespace(**d))
             if not hasattr(config, "dl"):
-                raise Exception(
-                    f"{colorize(config_url, Syntax.URL)} doesn't have `dl` key"
-                )
+                raise Error(f"{colorize(config_url, Syntax.URL)} doesn't have `dl` key")
     except Exception as e:
-        raise Exception(
+        raise Error(
             f"Failed to fetch registry configuration from {colorize(config_url, Syntax.URL)}: {e}"
         )
     return config
@@ -246,7 +245,7 @@ class CargoRegistry:
 def get_crate_prefix(name) -> str:
     match len(name):
         case 0:
-            raise Exception("Empty crate name")
+            raise Error("Empty crate name")
         case 1:
             return f"1/{name}"
         case 2:
@@ -437,7 +436,7 @@ def parse_install_arguments():
     args.binaries = set(args.binaries)
     args.crates = sorted(set(args.crates))
     if args.version:
-        raise Exception("Unexpected `--version` argument")
+        raise Error("Unexpected `--version` argument")
     return args
 
 
@@ -564,7 +563,7 @@ def find_installation_candidate(crate, registry, now, args):
             message = f"Failed to find {colorize(crate.name, Syntax.NAME)} with checksum {colorize(crate.checksum, Syntax.HASH)}"
         else:
             message = f"All available {colorize(crate.name, Syntax.NAME)} versions were either yanked or published less than {days(args.min_age.days)} ago"
-        raise Exception(message)
+        raise Error(message)
     return candidates[-1]
 
 
@@ -580,7 +579,7 @@ def download_archives_metadata(candidate, crate, registry, args):
         data = response.read()
     actual_cksum = hashlib.sha256(data).hexdigest()
     if not actual_cksum == candidate.cksum:
-        raise Exception(
+        raise Error(
             f"{colorize(filename, Syntax.PATH)} checksum mismatch:\n  expected {colorize(candidate.cksum, Syntax.HASH)}\n    actual {colorize(actual_cksum, Syntax.HASH)}"
         )
     if args.verbose:
@@ -595,7 +594,7 @@ def download_archives_metadata(candidate, crate, registry, args):
                     config = extracted_file.read()
                     break
     if config is None:
-        raise Exception(
+        raise Error(
             f"Failed to extract {colorize(REPO_FILE_NAME, Syntax.PATH)} from {colorize(filename, Syntax.PATH)}"
         )
     all_archives = []
@@ -627,19 +626,19 @@ def extract_binaries_from_tar_archive(data, binaries, archive_file_name):
             if binary is None:
                 continue
             if binary in extracted_files:
-                raise Exception(
+                raise Error(
                     f"Multiple {colorize(file_name, Syntax.PATH)} found in the archive"
                 )
             with tar.extractfile(member) as extracted_file:
                 if extracted_file is not None:
                     extracted_files[binary] = extracted_file.read()
     extracted_binaries = set(extracted_files.keys())
-    if not extracted_binaries == binaries:
-        missing = sorted(list(binaries - extracted_binaries))
+    if extracted_binaries != binaries:
+        missing = sorted(binaries - extracted_binaries)
         missing_str = ", ".join(
             [colorize(str(binary), Syntax.NAME) for binary in missing]
         )
-        raise Exception(
+        raise Error(
             f"The following binaries are missing in {colorize(archive_file_name, Syntax.PATH)}: {missing_str}"
         )
     return extracted_files
@@ -651,13 +650,13 @@ def select_binaries(all_archives, target, args):
         for archive in all_archives
         if archive.target == target and not archive.binaries.isdisjoint(args.binaries)
     ]
-    available = set([binary for archive in all_archives for binary in archive.binaries])
+    available = {binary for archive in all_archives for binary in archive.binaries}
     if not args.binaries.issubset(available):
-        missing = sorted(list(args.binaries - available))
+        missing = sorted(args.binaries - available)
         missing_str = ", ".join(
             [colorize(str(binary), Syntax.NAME) for binary in missing]
         )
-        raise Exception(
+        raise Error(
             f"The following binaries are missing in the archives: {missing_str}"
         )
     for binary in args.binaries:
@@ -689,7 +688,7 @@ def install_binaries(candidates, target, args):
                 data = response.read()
             actual_hash = blake2b(data)
             if not actual_hash == archive.hash:
-                raise Exception(
+                raise Error(
                     f"{colorize(archive_file_name, Syntax.PATH)} hash mismatch:\n"
                     f"  expected {colorize(archive.hash, Syntax.HASH)}\n"
                     f"    actual {colorize(actual_hash, Syntax.HASH)}"
@@ -731,11 +730,11 @@ def install_binaries(candidates, target, args):
             continue
         if len(remaining_binaries) == 0:
             break
-    if not len(remaining_binaries) == 0:
+    if len(remaining_binaries) != 0:
         remaining_str = ", ".join(
             [colorize(str(binary), Syntax.NAME) for binary in remaining_binaries]
         )
-        raise Exception(f"The following binaries failed to install: {remaining_str}")
+        raise Error(f"The following binaries failed to install: {remaining_str}")
     if args.verbose or args.dry_run:
         print(
             "🎉 Done!\n\nUse the following command to reproduce the installation:\n",
@@ -758,7 +757,7 @@ def install_crates(args):
                 candidate, crate.name, registry, args
             )
         except Exception as e:
-            raise Exception(
+            raise Error(
                 f"Failed to download archives metadata for {colorize(crate.name, Syntax.NAME)}: {e}"
             )
     target = rust_host_target_triple() if args.target is None else args.target
@@ -781,7 +780,7 @@ class CargoPackage:
             case 0:
                 pass
             case 1:
-                append = not self.binaries[0] == self.name
+                append = self.binaries[0] != self.name
             case _:
                 append = True
         if append:
@@ -807,7 +806,7 @@ def cargo_workspace_binaries(args):
             if "bin" not in target["crate_types"]:
                 continue
             binaries.append(target["name"])
-        if not len(binaries) == 0:
+        if len(binaries) != 0:
             binaries.sort()
             crates.append(
                 CargoPackage(
@@ -834,13 +833,13 @@ def find_crate_binaries(crates, target_dir, target, args):
             for path in paths:
                 if path.is_file() and os.access(path, os.X_OK):
                     if found is not None:
-                        raise Exception(
+                        raise Error(
                             f"Binary {colorize(name, Syntax.NAME)} found in multiple locations:\n"
                             f"- {colorize(found, Syntax.PATH)}\n- {colorize(path, Syntax.PATH)}"
                         )
                     found = path
             if found is None:
-                raise Exception(
+                raise Error(
                     f"Binary {colorize(name, Syntax.NAME)} not found; "
                     f"tried {colorize(paths[0], Syntax.PATH)} and {colorize(paths[1], Syntax.PATH)}"
                 )
@@ -856,7 +855,7 @@ def group_crates_into_archives(crates, target, args):
             try:
                 url = args.url.format(crate=crate, target=target)
             except Exception as e:
-                raise Exception(
+                raise Error(
                     f"Failed to interpolate {colorize(args.url, Syntax.CODE)}: {e}"
                 )
         if args.archive_name is None:
@@ -875,7 +874,7 @@ def group_crates_into_archives(crates, target, args):
         for crate in archive.crates:
             for file in crate.files:
                 if file.name in file_names:
-                    raise Exception(
+                    raise Error(
                         f"Multiple binaries with the same name in {colorize(archive_name, Syntax.PATH)}: "
                         f"{colorize(file.name, Syntax.PATH)}"
                     )
@@ -897,28 +896,30 @@ def generate_archives(args):
     for archive_name, archive in archives.items():
         extension = archive_name.split(".")[-1]
         if not extension == "gz":
-            raise Exception("Only tar.gz archives are currently supported")
+            raise Error("Only tar.gz archives are currently supported")
         archive_path = Path(archive_name)
-        with gzip.GzipFile(archive_path, "wb", mtime=0, compresslevel=9) as gzip_file:
-            with tarfile.open(fileobj=gzip_file, mode="w:") as tar:
-                for crate in archive.crates:
-                    for path in crate.files:
-                        metadata = tarfile.TarInfo(name=path.name)
-                        metadata.mtime = 0
-                        metadata.mode = 0o755
-                        metadata.uid = 0
-                        metadata.gid = 0
-                        metadata.uname = "root"
-                        metadata.gname = "root"
-                        if args.verbose:
-                            print(
-                                f"Adding {colorize(path, Syntax.PATH)} to {colorize(archive_name, Syntax.NAME)}",
-                                file=sys.stderr,
-                            )
-                        with open(path, "rb") as file:
-                            contents = file.read()
-                            metadata.size = len(contents)
-                            tar.addfile(metadata, fileobj=io.BytesIO(contents))
+        with (
+            gzip.GzipFile(archive_path, "wb", mtime=0, compresslevel=9) as gzip_file,
+            tarfile.open(fileobj=gzip_file, mode="w:") as tar,
+        ):
+            for crate in archive.crates:
+                for path in crate.files:
+                    metadata = tarfile.TarInfo(name=path.name)
+                    metadata.mtime = 0
+                    metadata.mode = 0o755
+                    metadata.uid = 0
+                    metadata.gid = 0
+                    metadata.uname = "root"
+                    metadata.gname = "root"
+                    if args.verbose:
+                        print(
+                            f"Adding {colorize(path, Syntax.PATH)} to {colorize(archive_name, Syntax.NAME)}",
+                            file=sys.stderr,
+                        )
+                    with open(path, "rb") as file:
+                        contents = file.read()
+                        metadata.size = len(contents)
+                        tar.addfile(metadata, fileobj=io.BytesIO(contents))
         if args.verbose:
             print(
                 f"Packaged {colorize(crate, Syntax.NAME)} as {colorize(archive_path, Syntax.PATH)}",
