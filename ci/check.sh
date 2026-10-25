@@ -19,7 +19,7 @@ EOF
 
 check_with_ruff() {
     ruff check cargo-fast-install
-    ruff format check cargo-fast-install
+    ruff format --check cargo-fast-install
 }
 
 check_with_mypy() {
