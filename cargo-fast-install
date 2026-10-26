@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
+from functools import cache
 
 REPO_FILE_NAME = "cargo-fast-install.jsonl"
 
@@ -130,7 +131,8 @@ class ArchiveSpec:
             variants.add(binary.variant)
         if len(variants) > 1:
             raise Error(
-                f"Only one binary variant per archive is allowed; got {', '.join(colorize(variants, Syntax.NAME))}"
+                f"Only one binary variant per archive is allowed; "
+                f"got {', '.join(colorize(variants, Syntax.NAME))}"
             )
         self.target = target
         self.hash = hash
@@ -157,19 +159,19 @@ class ArchiveSpec:
 def parse_archive_spec(json_object, crate) -> ArchiveSpec:
     def get_string(json_object, key) -> str:
         value = json_object.get(key)
-        if type(value) is not str:
+        if not isinstance(value, str):
             raise Error("Invalid archive spec")
         return value
 
     def get_optinoal_string(json_object, key) -> str | None:
         value = json_object.get(key)
-        if value is not None and type(value) is not str:
+        if value is not None and not isinstance(value, str):
             raise Error("Invalid archive spec")
         return value
 
     def get_string_list(json_object, key) -> list[str]:
         value = json_object.get(key)
-        if type(value) is not list or not all(type(x) is str for x in value):
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
             raise Error("Invalid archive spec")
         return value
 
@@ -209,7 +211,7 @@ def fetch_registry_config(base_url):
     except Exception as e:
         raise Error(
             f"Failed to fetch registry configuration from {colorize(config_url, Syntax.URL)}: {e}"
-        )
+        ) from e
     return config
 
 
@@ -321,15 +323,10 @@ def parse_duration(s):
     return timedelta(days=int(s))
 
 
-script_hash = None
-
-
+@cache
 def get_script_hash() -> str:
-    global script_hash
-    if script_hash is None:
-        with open(sys.argv[0], "rb") as file:
-            script_hash = blake2b(file.read())
-    return script_hash
+    with open(sys.argv[0], "rb") as file:
+        return blake2b(file.read())
 
 
 class Syntax(Enum):
@@ -343,20 +340,20 @@ class Syntax(Enum):
     CODE = 7
 
 
-def colorize(string, kind) -> str:
+def colorize(text, kind) -> str:
     if not sys.stderr.isatty() and os.environ.get("CI") is None:
-        return string
+        return text
     match kind:
         case Syntax.NAME | Syntax.URL | Syntax.PATH | Syntax.HASH | Syntax.VERSION:
-            return f"\x1b[34m{string}\x1b[0m"
+            return f"\x1b[34m{text}\x1b[0m"
         case Syntax.ERROR:
-            return f"\x1b[1;31m{string}\x1b[0m"
+            return f"\x1b[1;31m{text}\x1b[0m"
         case Syntax.WARNING:
-            return f"\x1b[1;33m{string}\x1b[0m"
+            return f"\x1b[1;33m{text}\x1b[0m"
         case Syntax.CODE:
-            return f"\x1b[1;35m{string}\x1b[0m"
+            return f"\x1b[1;35m{text}\x1b[0m"
         case _:
-            return string
+            return text
 
 
 def log_error(message):
@@ -558,11 +555,20 @@ def find_installation_candidate(crate, registry, now, args):
         candidates.append(candidate)
     if len(candidates) == 0:
         if crate.version is not None:
-            message = f"Failed to find {colorize(crate.name, Syntax.NAME)} with version {colorize(crate.version, Syntax.VERSION)}"
+            message = (
+                f"Failed to find {colorize(crate.name, Syntax.NAME)} "
+                f"with version {colorize(crate.version, Syntax.VERSION)}"
+            )
         elif crate.checksum is not None:
-            message = f"Failed to find {colorize(crate.name, Syntax.NAME)} with checksum {colorize(crate.checksum, Syntax.HASH)}"
+            message = (
+                f"Failed to find {colorize(crate.name, Syntax.NAME)} "
+                f"with checksum {colorize(crate.checksum, Syntax.HASH)}"
+            )
         else:
-            message = f"All available {colorize(crate.name, Syntax.NAME)} versions were either yanked or published less than {days(args.min_age.days)} ago"
+            message = (
+                f"All available {colorize(crate.name, Syntax.NAME)} versions "
+                f"were either yanked or published less than {days(args.min_age.days)} ago"
+            )
         raise Error(message)
     return candidates[-1]
 
@@ -580,7 +586,9 @@ def download_archives_metadata(candidate, crate, registry, args):
     actual_cksum = hashlib.sha256(data).hexdigest()
     if not actual_cksum == candidate.cksum:
         raise Error(
-            f"{colorize(filename, Syntax.PATH)} checksum mismatch:\n  expected {colorize(candidate.cksum, Syntax.HASH)}\n    actual {colorize(actual_cksum, Syntax.HASH)}"
+            f"{colorize(filename, Syntax.PATH)} checksum mismatch:\n"
+            f"  expected {colorize(candidate.cksum, Syntax.HASH)}\n"
+            f"    actual {colorize(actual_cksum, Syntax.HASH)}"
         )
     if args.verbose:
         print(f"Verified {colorize(filename, Syntax.PATH)} checksum", file=sys.stderr)
@@ -595,7 +603,8 @@ def download_archives_metadata(candidate, crate, registry, args):
                     break
     if config is None:
         raise Error(
-            f"Failed to extract {colorize(REPO_FILE_NAME, Syntax.PATH)} from {colorize(filename, Syntax.PATH)}"
+            f"Failed to extract {colorize(REPO_FILE_NAME, Syntax.PATH)} "
+            f"from {colorize(filename, Syntax.PATH)}"
         )
     all_archives = []
     for line in config.decode("utf-8").splitlines():
@@ -615,7 +624,7 @@ def download_archives_metadata(candidate, crate, registry, args):
 
 def extract_binaries_from_tar_archive(data, binaries, archive_file_name):
     suffix = ".exe" if platform.system().lower() == "windows" else ""
-    binaries_map = dict([[binary.name + suffix, binary] for binary in binaries])
+    binaries_map = {binary.name + suffix: binary for binary in binaries}
     extracted_files = {}
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
         for member in tar.getmembers():
@@ -635,11 +644,9 @@ def extract_binaries_from_tar_archive(data, binaries, archive_file_name):
     extracted_binaries = set(extracted_files.keys())
     if extracted_binaries != binaries:
         missing = sorted(binaries - extracted_binaries)
-        missing_str = ", ".join(
-            [colorize(str(binary), Syntax.NAME) for binary in missing]
-        )
         raise Error(
-            f"The following binaries are missing in {colorize(archive_file_name, Syntax.PATH)}: {missing_str}"
+            f"The following binaries are missing in {colorize(archive_file_name, Syntax.PATH)}: "
+            f"{', '.join([colorize(str(binary), Syntax.NAME) for binary in missing])}"
         )
     return extracted_files
 
@@ -718,7 +725,8 @@ def install_binaries(candidates, target, args):
                     target_file.chmod(0o755)
                     if args.verbose:
                         print(
-                            f"Installed {colorize(file_name, Syntax.PATH)} as {colorize(target_file, Syntax.PATH)}",
+                            f"Installed {colorize(file_name, Syntax.PATH)} "
+                            f"as {colorize(target_file, Syntax.PATH)}",
                             file=sys.stderr,
                         )
                 binaries.append(str(binary))
@@ -759,7 +767,7 @@ def install_crates(args):
         except Exception as e:
             raise Error(
                 f"Failed to download archives metadata for {colorize(crate.name, Syntax.NAME)}: {e}"
-            )
+            ) from e
     target = rust_host_target_triple() if args.target is None else args.target
     candidates = select_binaries(all_archives, target, args)
     install_binaries(candidates, target, args)
@@ -788,7 +796,7 @@ class CargoPackage:
         return s
 
 
-def cargo_workspace_binaries(args):
+def cargo_workspace_binaries():
     result = subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1"],
         capture_output=True,
@@ -857,7 +865,7 @@ def group_crates_into_archives(crates, target, args):
             except Exception as e:
                 raise Error(
                     f"Failed to interpolate {colorize(args.url, Syntax.CODE)}: {e}"
-                )
+                ) from e
         if args.archive_name is None:
             archive_name = url.split("/")[-1]
         else:
@@ -884,7 +892,7 @@ def group_crates_into_archives(crates, target, args):
 
 
 def generate_archives(args):
-    [target_dir, crates] = cargo_workspace_binaries(args)
+    [target_dir, crates] = cargo_workspace_binaries()
     target = rust_host_target_triple() if args.target is None else args.target
     find_crate_binaries(crates, target_dir, target, args)
     if args.verbose:
@@ -922,22 +930,28 @@ def generate_archives(args):
                         tar.addfile(metadata, fileobj=io.BytesIO(contents))
         if args.verbose:
             print(
-                f"Packaged {colorize(crate, Syntax.NAME)} as {colorize(archive_path, Syntax.PATH)}",
+                f"Packaged {', '.join([colorize(crate, Syntax.NAME) for crate in archive.crates])} "
+                f"as {colorize(archive_path, Syntax.PATH)}",
                 file=sys.stderr,
             )
         with open(archive_path, "rb") as file:
             hash = blake2b(file.read())
+        binaries = [
+            BinarySpec(name, args.variant)
+            for name in crate.binaries
+            for crate in archive.crates
+        ]
         archive_specs.append(
             ArchiveSpec(
                 target=target,
-                binaries=[BinarySpec(name, args.variant) for name in crate.binaries],
+                binaries=binaries,
                 url=archive.url,
                 hash=hash,
                 crate=None,
             )
         )
     archive_specs.sort()
-    with open(REPO_FILE_NAME, "w") as file:
+    with open(REPO_FILE_NAME, "w", encoding="utf-8") as file:
         for spec in archive_specs:
             print(spec.to_json(), file=file)
 

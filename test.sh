@@ -19,6 +19,7 @@ spawn_local_registry() {
     mkdir -p "$workdir"/http/registry
     mkdir -p "$workdir"/http/crates
     mkdir -p "$workdir"/http/binaries
+    mkdir -p "$workdir"/cargo-home
     port=25593
     python3 -m http.server --directory "$workdir"/http --bind 127.0.0.1 "$port" >/dev/null 2>&1 &
     registry_pid=$!
@@ -30,6 +31,7 @@ spawn_local_registry() {
         sleep 1
     done
     export CARGO_FAST_INSTALL_REGISTRY="$registry_url"
+    export CARGO_HOME="$workdir"/cargo-home
 }
 
 run_test() {
@@ -38,6 +40,8 @@ run_test() {
         mkdir -p "$workdir"/http/"$dir"
     done
     rm -rf "$workdir"/mycrate
+    rm -rf "$workdir"/cargo-home
+    mkdir -p "$workdir"/cargo-home
     cat >"$workdir"/http/registry/config.json <<EOF
 {"dl":"$download_url"}
 EOF
@@ -93,6 +97,7 @@ test_normal_package() {
 {"name":"mycrate","vers":"0.1.0","deps":[],"cksum":"$cksum","features":{},"yanked":false,"pubtime":"2026-09-17T21:00:56Z"}
 EOF
     cargo-fast-install mycrate
+    test -x "$CARGO_HOME"/bin/mycrate
     expect_fail cargo-fast-install mycrate:full
 }
 
@@ -113,6 +118,7 @@ test_normal_package_with_variant() {
 {"name":"mycrate","vers":"0.1.0","deps":[],"cksum":"$cksum","features":{},"yanked":false,"pubtime":"2026-09-17T21:00:56Z"}
 EOF
     cargo-fast-install mycrate:full
+    test -x "$CARGO_HOME"/bin/mycrate
     expect_fail cargo-fast-install mycrate
 }
 
@@ -134,6 +140,7 @@ test_bad_archive_hash() {
 {"name":"mycrate","vers":"0.1.0","deps":[],"cksum":"$cksum","features":{},"yanked":false,"pubtime":"2026-09-17T21:00:56Z"}
 EOF
     expect_fail cargo-fast-install mycrate
+    ! test -x "$CARGO_HOME"/bin/mycrate
 }
 
 test_bad_crate_hash() {
@@ -154,6 +161,7 @@ test_bad_crate_hash() {
 {"name":"mycrate","vers":"0.1.0","deps":[],"cksum":"$cksum","features":{},"yanked":false,"pubtime":"2026-09-17T21:00:56Z"}
 EOF
     expect_fail cargo-fast-install mycrate
+    ! test -x "$CARGO_HOME"/bin/mycrate
 }
 
 test_yanked_crate() {
@@ -173,6 +181,7 @@ test_yanked_crate() {
 EOF
     expect_fail cargo-fast-install mycrate
     expect_fail cargo-fast-install --crate mycrate@"$cksum" mycrate
+    ! test -x "$CARGO_HOME"/bin/mycrate
 }
 
 cleanup() {
