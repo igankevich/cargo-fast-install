@@ -16,9 +16,9 @@ import tarfile
 import urllib.request
 from datetime import UTC, datetime, timedelta
 from enum import Enum
+from functools import cache
 from pathlib import Path
 from types import SimpleNamespace
-from functools import cache
 
 REPO_FILE_NAME = "yard.jsonl"
 
@@ -375,10 +375,7 @@ def create_http_request(url):
     )
 
 
-def parse_install_arguments():
-    parser = argparse.ArgumentParser(
-        description="Fast and secure installation of Rust binaries"
-    )
+def install_arguments(parser):
     parser.add_argument(
         "binaries",
         metavar="BINARY[:VARIANT]",
@@ -415,38 +412,13 @@ def parse_install_arguments():
         help="Minimum crate version age. Default: 7d.",
     )
     parser.add_argument(
-        "-q", "--quiet", action="store_true", help="Produce less output"
-    )
-    parser.add_argument("--version", action="store_true", help="Print script file hash")
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Don't install the binary, but print the command to reproduce the installation",
     )
-    args = parser.parse_args()
-    if args.crates is None:
-        args.crates = [
-            CrateSpec(binary.name, version=None, checksum=None)
-            for binary in args.binaries
-        ]
-    args.verbose = not args.quiet
-    args.binaries = set(args.binaries)
-    args.crates = sorted(set(args.crates))
-    if args.version:
-        raise Error("Unexpected `--version` argument")
-    return args
 
 
-def parse_generate_arguments():
-    parser = argparse.ArgumentParser(
-        description="Fast and secure installation of Rust binaries", add_help=False
-    )
-    parser.add_argument(
-        "--generate",
-        action="store_true",
-        help=f"Generate {REPO_FILE_NAME} instead of installing binaries",
-        required=True,
-    )
+def generate_arguments(parser):
     parser.add_argument(
         "--variant", type=str, default=None, help="Variant of the binary"
     )
@@ -470,46 +442,51 @@ def parse_generate_arguments():
         action="append",
         help="Cargo packages",
     )
-    parser.add_argument(
-        "-q", "--quiet", action="store_true", help="Produce less output"
-    )
-    parser.add_argument(
-        "-h", "--help", action="store_true", help="Show this help message"
-    )
-    args = parser.parse_args()
-    args.verbose = not args.quiet
-    if args.release and args.profile is None:
-        args.profile = "release"
-    if args.packages is None:
-        args.packages = []
-    args.packages = sorted(set(args.packages))
-    if args.help:
-        parser.print_help()
-        sys.exit(0)
-    return args
 
 
 def parse_arguments():
-    # Support running as `cargo fast-install`.
-    if len(sys.argv) > 1 and sys.argv[1] == "fast-install":
-        del sys.argv[1]
-
-    subcommand = "install"
-    if len(sys.argv) > 1:
+    if len(sys.argv) == 2:
         match sys.argv[1]:
             case "--version":
                 print(get_script_hash())
                 sys.exit(0)
-            case "--generate":
-                subcommand = "generate"
 
-    match subcommand:
+    parser = argparse.ArgumentParser(
+        description="Fast and secure installation of Rust binaries"
+    )
+    parser.add_argument(
+        "-q", "--quiet", action="store_true", help="Produce less output"
+    )
+    parser.add_argument("--version", action="store_true", help="Print script file hash")
+    subparsers = parser.add_subparsers(
+        dest="subcommand", metavar="COMMAND", required=True
+    )
+    install_parser = subparsers.add_parser(
+        "install", help="Install pre-built Rust binary"
+    )
+    generate_parser = subparsers.add_parser("generate", help="Generate archives")
+    install_arguments(install_parser)
+    generate_arguments(generate_parser)
+    args = parser.parse_args()
+    if args.version:
+        raise Error("Unexpected `--version` argument")
+    args.verbose = not args.quiet
+    match args.subcommand:
         case "install":
-            args = parse_install_arguments()
+            if args.crates is None:
+                args.crates = [
+                    CrateSpec(binary.name, version=None, checksum=None)
+                    for binary in args.binaries
+                ]
+            args.binaries = set(args.binaries)
+            args.crates = sorted(set(args.crates))
         case "generate":
-            args = parse_generate_arguments()
-
-    return [subcommand, args]
+            if args.release and args.profile is None:
+                args.profile = "release"
+            if args.packages is None:
+                args.packages = []
+            args.packages = sorted(set(args.packages))
+    return args
 
 
 def find_installation_candidate(crate, registry, now, args):
@@ -958,8 +935,8 @@ def generate_archives(args):
 
 def main():
     try:
-        [subcommand, args] = parse_arguments()
-        match subcommand:
+        args = parse_arguments()
+        match args.subcommand:
             case "install":
                 install_crates(args)
             case "generate":
