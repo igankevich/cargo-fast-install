@@ -19,13 +19,13 @@ EOF
 }
 
 check_with_ruff() {
-    ruff check cargo-fast-install
-    ruff format --check cargo-fast-install
+    ruff check yard
+    ruff format --check yard
 }
 
 check_with_mypy() {
     pip install mypy
-    mypy cargo-fast-install
+    mypy yard
 }
 
 main

@@ -20,7 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from functools import cache
 
-REPO_FILE_NAME = "cargo-fast-install.jsonl"
+REPO_FILE_NAME = "yard.jsonl"
 
 
 class Error(Exception):
@@ -366,7 +366,7 @@ def log_warning(message):
 
 def get_user_agent():
     version = get_script_hash()[:8]
-    return f"cargo-fast-install/{version}"
+    return f"yard/{version}"
 
 
 def create_http_request(url):
@@ -748,7 +748,7 @@ def install_binaries(candidates, target, args):
             "🎉 Done!\n\nUse the following command to reproduce the installation:\n",
             file=sys.stderr,
         )
-        lines = [f"cargo-fast-install --target {target}"]
+        lines = [f"yard --target {target}"]
         lines += sorted(crates)
         lines.append(" ".join(sorted(binaries)))
         print(" \\\n    ".join(lines))

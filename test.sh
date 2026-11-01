@@ -74,10 +74,10 @@ test_archive_reproducibility() {
     cd "$workdir"/mycrate
     cargo init --bin
     cargo build --release
-    cargo-fast-install --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
-    sha256sum cargo-fast-install.jsonl >"$workdir"/CHECKSUM
+    yard --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
+    sha256sum yard.jsonl >"$workdir"/CHECKSUM
     sleep 1
-    cargo-fast-install --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
+    yard --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
     sha256sum --check "$workdir"/CHECKSUM
 }
 
@@ -86,7 +86,7 @@ test_normal_package() {
     cd "$workdir"/mycrate
     cargo init --bin
     cargo build --release
-    cargo-fast-install --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
+    yard --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz"
     mv *.tar.gz "$workdir"/http/binaries
     cargo package --allow-dirty
     cksum="$(sha256sum target/package/mycrate-0.1.0.crate | awk '{ print $1 }')"
@@ -96,9 +96,9 @@ test_normal_package() {
     cat >"$workdir"/http/registry/my/cr/mycrate <<EOF
 {"name":"mycrate","vers":"0.1.0","deps":[],"cksum":"$cksum","features":{},"yanked":false,"pubtime":"2026-09-17T21:00:56Z"}
 EOF
-    cargo-fast-install mycrate
+    yard mycrate
     test -x "$CARGO_HOME"/bin/mycrate
-    expect_fail cargo-fast-install mycrate:full
+    expect_fail yard mycrate:full
 }
 
 test_normal_package_with_variant() {
@@ -106,8 +106,8 @@ test_normal_package_with_variant() {
     cd "$workdir"/mycrate
     cargo init --bin
     cargo build --release
-    cargo-fast-install --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz" --variant full
-    cat cargo-fast-install.jsonl
+    yard --generate --url "$binaries_url/{crate.name}-{crate.version}-{target}.tar.gz" --variant full
+    cat yard.jsonl
     mv *.tar.gz "$workdir"/http/binaries
     cargo package --allow-dirty
     cksum="$(sha256sum target/package/mycrate-0.1.0.crate | awk '{ print $1 }')"
@@ -117,9 +117,9 @@ test_normal_package_with_variant() {
     cat >"$workdir"/http/registry/my/cr/mycrate <<EOF
 {"name":"mycrate","vers":"0.1.0","deps":[],"cksum":"$cksum","features":{},"yanked":false,"pubtime":"2026-09-17T21:00:56Z"}
 EOF
-    cargo-fast-install mycrate:full
+    yard mycrate:full
     test -x "$CARGO_HOME"/bin/mycrate
-    expect_fail cargo-fast-install mycrate
+    expect_fail yard mycrate
 }
 
 test_bad_archive_hash() {
@@ -127,7 +127,7 @@ test_bad_archive_hash() {
     cd "$workdir"/mycrate
     cargo init --bin
     cargo build --release
-    cargo-fast-install --generate --url "$binaries_url/{crate.name}.tar.gz"
+    yard --generate --url "$binaries_url/{crate.name}.tar.gz"
     # Damage the archive.
     printf "x" >>mycrate.tar.gz
     mv mycrate.tar.gz "$workdir"/http/binaries
@@ -139,7 +139,7 @@ test_bad_archive_hash() {
     cat >"$workdir"/http/registry/my/cr/mycrate <<EOF
 {"name":"mycrate","vers":"0.1.0","deps":[],"cksum":"$cksum","features":{},"yanked":false,"pubtime":"2026-09-17T21:00:56Z"}
 EOF
-    expect_fail cargo-fast-install mycrate
+    expect_fail yard mycrate
     ! test -x "$CARGO_HOME"/bin/mycrate
 }
 
@@ -148,7 +148,7 @@ test_bad_crate_hash() {
     cd "$workdir"/mycrate
     cargo init --bin
     cargo build --release
-    cargo-fast-install --generate --url "$binaries_url/{crate.name}.tar.gz"
+    yard --generate --url "$binaries_url/{crate.name}.tar.gz"
     mv mycrate.tar.gz "$workdir"/http/binaries
     cargo package --allow-dirty
     cksum="$(sha256sum target/package/mycrate-0.1.0.crate | awk '{ print $1 }')"
@@ -160,7 +160,7 @@ test_bad_crate_hash() {
     cat >"$workdir"/http/registry/my/cr/mycrate <<EOF
 {"name":"mycrate","vers":"0.1.0","deps":[],"cksum":"$cksum","features":{},"yanked":false,"pubtime":"2026-09-17T21:00:56Z"}
 EOF
-    expect_fail cargo-fast-install mycrate
+    expect_fail yard mycrate
     ! test -x "$CARGO_HOME"/bin/mycrate
 }
 
@@ -169,7 +169,7 @@ test_yanked_crate() {
     cd "$workdir"/mycrate
     cargo init --bin
     cargo build --release
-    cargo-fast-install --generate --url "$binaries_url/{crate.name}.tar.gz"
+    yard --generate --url "$binaries_url/{crate.name}.tar.gz"
     mv mycrate.tar.gz "$workdir"/http/binaries
     cargo package --allow-dirty
     cksum="$(sha256sum target/package/mycrate-0.1.0.crate | awk '{ print $1 }')"
@@ -179,8 +179,8 @@ test_yanked_crate() {
     cat >"$workdir"/http/registry/my/cr/mycrate <<EOF
 {"name":"mycrate","vers":"0.1.0","deps":[],"cksum":"$cksum","features":{},"yanked":true,"pubtime":"2026-09-17T21:00:56Z"}
 EOF
-    expect_fail cargo-fast-install mycrate
-    expect_fail cargo-fast-install --crate mycrate@"$cksum" mycrate
+    expect_fail yard mycrate
+    expect_fail yard --crate mycrate@"$cksum" mycrate
     ! test -x "$CARGO_HOME"/bin/mycrate
 }
 
