@@ -13,6 +13,7 @@ import string
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.request
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -400,8 +401,7 @@ def install_arguments(parser):
     parser.add_argument(
         "--registry",
         type=str,
-        default=os.environ.get("CARGO_FAST_INSTALL_REGISTRY")
-        or "https://index.crates.io",
+        default=os.environ.get("YARD_REGISTRY") or "https://index.crates.io",
         help="Cargo registry URL",
     )
     parser.add_argument(
@@ -444,6 +444,42 @@ def generate_arguments(parser):
     )
 
 
+def build_arguments(parser):
+    parser.add_argument(
+        "crates",
+        metavar="CRATE[@VERSION_OR_HASH]",
+        type=parse_crate_spec,
+        nargs="*",
+        help="Rust crates to build binaries from",
+    )
+    parser.add_argument("--target", type=str, default=None, help="Rust target triple")
+    parser.add_argument("--profile", type=str, default="release", help="Cargo profile")
+    parser.add_argument(
+        "--rust-version", type=str, default="1.99.1", help="Rust version"
+    )
+    parser.add_argument(
+        "--rustup-version", type=str, default="1.29.2", help="`rustup-init` version"
+    )
+    parser.add_argument(
+        "--rustup-hash",
+        type=str,
+        default="5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4",
+        help="`rustup-init` hash",
+    )
+    parser.add_argument(
+        "--docker-image",
+        type=str,
+        default="rust@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137",
+        help="Docker image",
+    )
+    parser.add_argument(
+        "--registry",
+        type=str,
+        default=os.environ.get("YARD_REGISTRY") or "https://index.crates.io",
+        help="Cargo registry URL",
+    )
+
+
 def parse_arguments():
     if len(sys.argv) == 2:
         match sys.argv[1]:
@@ -461,17 +497,27 @@ def parse_arguments():
     subparsers = parser.add_subparsers(
         dest="subcommand", metavar="COMMAND", required=True
     )
-    install_parser = subparsers.add_parser(
-        "install", help="Install pre-built Rust binary"
+    build_arguments(
+        subparsers.add_parser("build", help="Build Rust crate in a sandbox")
     )
-    generate_parser = subparsers.add_parser("generate", help="Generate archives")
-    install_arguments(install_parser)
-    generate_arguments(generate_parser)
+    generate_arguments(subparsers.add_parser("generate", help="Generate archives"))
+    install_arguments(
+        subparsers.add_parser("install", help="Install pre-built Rust binary")
+    )
     args = parser.parse_args()
     if args.version:
         raise Error("Unexpected `--version` argument")
     args.verbose = not args.quiet
     match args.subcommand:
+        case "build":
+            args.crates = set(args.crates)
+            args.min_age = timedelta(days=0)
+        case "generate":
+            if args.release and args.profile is None:
+                args.profile = "release"
+            if args.packages is None:
+                args.packages = []
+            args.packages = sorted(set(args.packages))
         case "install":
             if args.crates is None:
                 args.crates = [
@@ -480,12 +526,6 @@ def parse_arguments():
                 ]
             args.binaries = set(args.binaries)
             args.crates = sorted(set(args.crates))
-        case "generate":
-            if args.release and args.profile is None:
-                args.profile = "release"
-            if args.packages is None:
-                args.packages = []
-            args.packages = sorted(set(args.packages))
     return args
 
 
@@ -550,7 +590,7 @@ def find_installation_candidate(crate, registry, now, args):
     return candidates[-1]
 
 
-def download_archives_metadata(candidate, crate, registry, args):
+def download_crate(candidate, crate, registry, args):
     url = registry.get_download_url(candidate)
     filename = f"{crate}-{candidate.vers}.crate"
     if args.verbose:
@@ -569,6 +609,12 @@ def download_archives_metadata(candidate, crate, registry, args):
         )
     if args.verbose:
         print(f"Verified {colorize(filename, Syntax.PATH)} checksum", file=sys.stderr)
+    return data
+
+
+def download_archives_metadata(candidate, crate, registry, args):
+    filename = f"{crate}-{candidate.vers}.crate"
+    data = download_crate(candidate, crate, registry, args)
     config = None
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
         for member in tar.getmembers():
@@ -933,14 +979,248 @@ def generate_archives(args):
             print(spec.to_json(), file=file)
 
 
+class WorkDirs:
+    def __init__(self, workdir):
+        self.cargo = workdir / "cargo"
+        self.rustup = workdir / "rustup"
+        for path in [self.cargo, self.rustup]:
+            os.makedirs(path)
+
+
+def install_rust_toolchain(workdirs, uid, gid, target, registry, args):
+    rustup_script = """
+    set -e
+    curl -Lfo /rustup/rustup-init https://static.rust-lang.org/rustup/archive/"$RUSTUP_VERSION"/"$RUST_TARGET"/rustup-init
+    echo "$RUSTUP_HASH /rustup/rustup-init" >/rustup/rustup-init-hash
+    sha256sum -c /rustup/rustup-init-hash
+    chmod +x /rustup/rustup-init
+    /rustup/rustup-init --yes --quiet --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" --default-host "$RUST_TARGET"
+    rm /rustup/rustup-init /rustup/rustup-init-hash
+    """
+    subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            f"--user={uid}:{gid}",
+            f"--volume={workdirs.cargo}:/cargo:rw",
+            f"--volume={workdirs.rustup}:/rustup:rw",
+            args.docker_image,
+            "/usr/bin/env",
+            "-i",
+            f"RUST_VERSION={args.rust_version}",
+            f"RUST_TARGET={target}",
+            "CARGO_HOME=/cargo",
+            "RUSTUP_HOME=/rustup",
+            f"RUSTUP_DIST_SERVER={registry.base_url}",
+            f"RUSTUP_VERSION={args.rustup_version}",
+            f"RUSTUP_HASH={args.rustup_hash}",
+            "PATH=/cargo/bin:/usr/bin",
+            "/bin/sh",
+            "-c",
+            rustup_script,
+        ],
+        check=True,
+    )
+
+
+class CrateDirs:
+    def __init__(self, workdir):
+        self.src = workdir / "src"
+        self.target = workdir / "target"
+        for path in [self.src, self.target]:
+            os.makedirs(path)
+
+
+def cargo_fetch(workdirs, crate_dirs, uid, gid, target, args):
+    docker = [
+        "docker",
+        "run",
+        "--rm",
+        f"--user={uid}:{gid}",
+        f"--volume={workdirs.cargo}:/cargo:rw",
+        f"--volume={workdirs.rustup}:/rustup:ro",
+        f"--volume={crate_dirs.src}:/src:ro",
+        "--workdir=/src",
+        args.docker_image,
+    ]
+    env = [
+        "/usr/bin/env",
+        "-i",
+        "CARGO_HOME=/cargo",
+        "RUSTUP_HOME=/rustup",
+        "PATH=/cargo/bin:/usr/bin",
+    ]
+    cargo = ["cargo", "fetch", "--locked", f"--target={target}"]
+    subprocess.run(docker + env + cargo, check=True)
+
+
+def cargo_build(workdirs, crate_dirs, uid, gid, target, args):
+    docker = [
+        "docker",
+        "run",
+        "--rm",
+        f"--user={uid}:{gid}",
+        f"--volume={workdirs.cargo}:/cargo:ro",
+        f"--volume={workdirs.rustup}:/rustup:ro",
+        f"--volume={crate_dirs.src}:/src:ro",
+        f"--volume={crate_dirs.target}:/target:rw",
+        "--workdir=/src",
+        "--network=none",
+        args.docker_image,
+    ]
+    env = [
+        "/usr/bin/env",
+        "-i",
+        "CARGO_HOME=/cargo",
+        "RUSTUP_HOME=/rustup",
+        "PATH=/cargo/bin:/usr/bin",
+    ]
+    cargo = [
+        "cargo",
+        "build",
+        "--locked",
+        "--offline",
+        f"--target={target}",
+        f"--profile={args.profile}",
+        "--target-dir=/target",
+    ]
+    subprocess.run(docker + env + cargo, check=True)
+
+
+def cargo_metadata_binaries(workdirs, crate_dirs, uid, gid, args):
+    docker = [
+        "docker",
+        "run",
+        "--rm",
+        f"--user={uid}:{gid}",
+        f"--volume={workdirs.cargo}:/cargo:ro",
+        f"--volume={workdirs.rustup}:/rustup:ro",
+        f"--volume={crate_dirs.src}:/src:ro",
+        f"--volume={crate_dirs.target}:/target:ro",
+        "--workdir=/src",
+        "--network=none",
+        args.docker_image,
+    ]
+    env = [
+        "/usr/bin/env",
+        "-i",
+        "CARGO_HOME=/cargo",
+        "RUSTUP_HOME=/rustup",
+        "PATH=/cargo/bin:/usr/bin",
+    ]
+    cargo = [
+        "cargo",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--no-deps",
+        "--format-version=1",
+    ]
+    result = subprocess.run(
+        docker + env + cargo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    metadata = json.loads(result.stdout.strip())
+    binaries = []
+    for package in metadata["packages"]:
+        for t in package["targets"]:
+            if "bin" not in t["kind"]:
+                continue
+            if "bin" not in t["crate_types"]:
+                continue
+            binaries.append(t["name"])
+    binaries.sort()
+    return binaries
+
+
+def tar_members_stripped(tar):
+    prefixes = []
+    for member in tar.getmembers():
+        path = Path(member.path)
+        if member.isfile() and path.name == "Cargo.toml":
+            prefixes.append(path.parent)
+    if len(prefixes) == 0:
+        raise Error("Failed to find `Cargo.toml` in the crate archive")
+    prefixes.sort(key=lambda path: len(path.parts))
+    prefix = prefixes[0]
+    for member in tar.getmembers():
+        member.path = str(Path(member.path).relative_to(prefix))
+        yield member
+
+
+def build_crates(args):
+    now = datetime.now(UTC)
+    registry = CargoRegistry(args.registry)
+    target = rust_host_target_triple() if args.target is None else args.target
+    try:
+        uid = os.getuid()
+        gid = os.getgid()
+    except AttributeError:
+        uid = 0
+        gid = 0
+    if uid == 0:
+        uid = 65534
+        gid = 65534
+    all_binaries = {}
+    with tempfile.TemporaryDirectory(prefix="yard-") as workdir:
+        workdirs = WorkDirs(Path(workdir).absolute())
+        install_rust_toolchain(workdirs, uid, gid, target, registry, args)
+        for crate in args.crates:
+            candidate = find_installation_candidate(crate, registry, now, args)
+            data = download_crate(candidate, crate.name, registry, args)
+            with tempfile.TemporaryDirectory(prefix="yard-crate-") as tmpdir:
+                crate_dirs = CrateDirs(Path(tmpdir).absolute())
+                with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
+                    tar.extractall(
+                        members=tar_members_stripped(tar),
+                        path=crate_dirs.src,
+                        filter="data",
+                    )
+                cargo_fetch(workdirs, crate_dirs, uid, gid, target, args)
+                cargo_build(workdirs, crate_dirs, uid, gid, target, args)
+                binaries = cargo_metadata_binaries(workdirs, crate_dirs, uid, gid, args)
+                for binary in binaries:
+                    if binary in all_binaries:
+                        raise Error(f"Duplicate binary name: {binary}")
+                    binary_path = crate_dirs.target / target / args.profile / binary
+                    with open(binary_path, "rb") as file:
+                        all_binaries[binary] = file.read()
+    sorted_binaries = sorted(all_binaries.items())
+    archive_path = Path("archive.tar.gz")
+    with (
+        gzip.GzipFile(archive_path, "wb", mtime=0, compresslevel=9) as gzip_file,
+        tarfile.open(fileobj=gzip_file, mode="w:") as tar,
+    ):
+        for file_name, contents in sorted_binaries:
+            metadata = tarfile.TarInfo(name=file_name)
+            metadata.mtime = 0
+            metadata.mode = 0o755
+            metadata.uid = 0
+            metadata.gid = 0
+            metadata.uname = "root"
+            metadata.gname = "root"
+            metadata.size = len(contents)
+            if args.verbose:
+                print(
+                    f"Adding {colorize(file_name, Syntax.PATH)} to {colorize(archive_path.name, Syntax.NAME)}",
+                    file=sys.stderr,
+                )
+            tar.addfile(metadata, fileobj=io.BytesIO(contents))
+
+
 def main():
     try:
         args = parse_arguments()
         match args.subcommand:
-            case "install":
-                install_crates(args)
+            case "build":
+                build_crates(args)
             case "generate":
                 generate_archives(args)
+            case "install":
+                install_crates(args)
     except Exception as e:
         log_error(f"{e}")
         sys.exit(1)

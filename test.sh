@@ -30,7 +30,7 @@ spawn_local_registry() {
     until curl -fs "$registry_url"/health >/dev/null 2>&1; do
         sleep 1
     done
-    export CARGO_FAST_INSTALL_REGISTRY="$registry_url"
+    export YARD_REGISTRY="$registry_url"
     export CARGO_HOME="$workdir"/cargo-home
 }
 
@@ -58,10 +58,18 @@ EOF
 }
 
 expect_fail() {
-    set +e
+    case "$-" in
+    *e*) e_is_set=1 ;;
+    *) e_is_set=0 ;;
+    esac
+    if test "$e_is_set"; then
+        set +e
+    fi
     "$@" >"$workdir"/stdout 2>&1
     ret=$?
-    set -e
+    if test "$e_is_set"; then
+        set -e
+    fi
     if test "$ret" = 0; then
         printf "Expected \`%s\` to fail, but it succeeded\n" "$*" >&2
         cat "$workdir"/stdout >&2
