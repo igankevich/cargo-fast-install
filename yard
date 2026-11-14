@@ -123,13 +123,16 @@ class ArchiveSpec:
     hash: str
     url: str
     binaries: list[BinarySpec]
+    variant: str | None
 
     def __init__(self, target, hash, url, binaries, crate):
         if len(binaries) == 0:
             raise Error("Archive with no binaries is not allowed")
         variants = set()
+        variant = None
         for binary in binaries:
             variants.add(binary.variant)
+            variant = binary.variant
         if len(variants) > 1:
             raise Error(
                 f"Only one binary variant per archive is allowed; "
@@ -140,6 +143,7 @@ class ArchiveSpec:
         self.url = url
         self.binaries = binaries
         self.crate = crate
+        self.variant = variant
 
     def to_json(self) -> str:
         json_object = {
@@ -148,12 +152,8 @@ class ArchiveSpec:
             "url": self.url,
             "hash": self.hash,
         }
-        variant = None
-        for binary in self.binaries:
-            variant = binary.variant
-            break
-        if variant is not None:
-            json_object["variant"] = variant
+        if self.variant is not None:
+            json_object["variant"] = self.variant
         return json.dumps(json_object, sort_keys=True, separators=(",", ":"))
 
 
@@ -193,12 +193,54 @@ def blake2b(data) -> str:
     return hashlib.blake2b(data).hexdigest()[:64]
 
 
+def pretty_blake2b(data) -> str:
+    return f"b2:{hashlib.blake2b(data).hexdigest()}"
+
+
 def is_hash(s) -> bool:
     return len(s) == 64 and all(ch in string.hexdigits for ch in s)
 
 
 def is_sha256(s) -> bool:
     return len(s) == 64 and all(ch in string.hexdigits for ch in s)
+
+
+def hash_directory(root):
+    def h(tag, data):
+        hasher = hashlib.blake2b()
+        hasher.update(tag)
+        hasher.update(data)
+        return hasher.digest()
+
+    # Find all files.
+    paths = []
+    for dir, subdirs, files in os.walk(root):
+        prefix = Path(dir).relative_to(root)
+        for name in subdirs:
+            paths.append((0, prefix / name))
+        for name in files:
+            paths.append((1, prefix / name))
+    paths.sort()
+    # Compute file hashes.
+    hash = None
+    for i, (kind, path) in enumerate(paths):
+        h0 = h(b"kind", kind.to_bytes(1, byteorder="little"))
+        h1 = h(b"index", i.to_bytes(4, byteorder="little"))
+        h2 = h(b"path", str(path).encode("utf-8"))
+        x = h(h(h0, h1), h2)
+        match kind:
+            case 0:
+                y = x
+            case 1:
+                with open(root / path, "rb") as f:
+                    data = f.read()
+                h3 = h(b"contents", data)
+                y = h(x, h3)
+        if hash is None:
+            hash = y
+        else:
+            hash = h(hash, y)
+    return f"b2/dir:{hash.hex()}"
 
 
 def fetch_registry_config(base_url):
@@ -467,6 +509,13 @@ def build_arguments(parser):
         help="`rustup-init` hash",
     )
     parser.add_argument(
+        "--rustup-dist-server",
+        type=str,
+        default=os.environ.get("YARD_RUSTUP_DIST_SERVER")
+        or "https://static.rust-lang.org",
+        help="Rustup distribution server root URL",
+    )
+    parser.add_argument(
         "--docker-image",
         type=str,
         default="rust@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137",
@@ -559,7 +608,12 @@ def find_installation_candidate(crate, registry, now, args):
                 log_warning(f"Crate {colorize(crate, Syntax.NAME)} was yanked")
             continue
         pubtime = datetime.fromisoformat(candidate.pubtime)
-        if pubtime > now or pubtime + args.min_age > now:
+        if pubtime > now:
+            log_warning(
+                f"Crate {colorize(crate, Syntax.NAME)} was published in the future: {pubtime}; current time is {now}"
+            )
+            continue
+        if pubtime + args.min_age > now:
             if version_matches or checksum_matches:
                 log_warning(
                     f"Crate {colorize(crate, Syntax.NAME)} was published less than {days(args.min_age.days)} ago"
@@ -981,17 +1035,24 @@ def generate_archives(args):
 
 class WorkDirs:
     def __init__(self, workdir):
-        self.cargo = workdir / "cargo"
         self.rustup = workdir / "rustup"
-        for path in [self.cargo, self.rustup]:
+        self.cargo = workdir / "cargo"
+        for path in [self.rustup, self.cargo]:
             os.makedirs(path)
 
 
-def install_rust_toolchain(workdirs, uid, gid, target, registry, args):
+def get_rustup_init_url(rustup_dist_server, rustup_version, rust_target) -> str:
+    return f"{rustup_dist_server}/rustup/archive/{rustup_version}/{rust_target}/rustup-init"
+
+
+def install_rust_toolchain(workdirs, uid, gid, target, args):
+    rustup_init_url = get_rustup_init_url(
+        args.rustup_dist_server, args.rustup_version, target
+    )
     rustup_script = """
     set -e
-    curl -Lfo /rustup/rustup-init https://static.rust-lang.org/rustup/archive/"$RUSTUP_VERSION"/"$RUST_TARGET"/rustup-init
-    echo "$RUSTUP_HASH /rustup/rustup-init" >/rustup/rustup-init-hash
+    curl -Lfo /rustup/rustup-init "$rustup_init_url"
+    echo "$rustup_hash /rustup/rustup-init" >/rustup/rustup-init-hash
     sha256sum -c /rustup/rustup-init-hash
     chmod +x /rustup/rustup-init
     /rustup/rustup-init --yes --quiet --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" --default-host "$RUST_TARGET"
@@ -1012,9 +1073,10 @@ def install_rust_toolchain(workdirs, uid, gid, target, registry, args):
             f"RUST_TARGET={target}",
             "CARGO_HOME=/cargo",
             "RUSTUP_HOME=/rustup",
-            f"RUSTUP_DIST_SERVER={registry.base_url}",
+            f"RUSTUP_DIST_SERVER={args.rustup_dist_server}",
             f"RUSTUP_VERSION={args.rustup_version}",
-            f"RUSTUP_HASH={args.rustup_hash}",
+            f"rustup_hash={args.rustup_hash}",
+            f"rustup_init_url={rustup_init_url}",
             "PATH=/cargo/bin:/usr/bin",
             "/bin/sh",
             "-c",
@@ -1151,10 +1213,49 @@ def tar_members_stripped(tar):
         yield member
 
 
+class UrlInput:
+    def __init__(self, url, hash):
+        self.url = url
+        self.hash = hash
+
+
+class FileInput:
+    def __init__(self, path, hash):
+        self.path = path
+        self.hash = hash
+
+
+class Provenance:
+    def __init__(self):
+        self.python = python_hash()
+        self.rustup = None
+        self.rustup_dir = None
+        self.cargo_dir = None
+        self.crates = []
+        self.binaries = []
+
+    def to_json(self) -> str:
+        json_object = {
+            "python": self.python,
+            "rustup": self.rustup.__dict__,
+            "rustup_dir": self.rustup_dir,
+            "cargo_dir": self.cargo_dir,
+            "crates": sorted([crate.__dict__ for crate in self.crates]),
+            "binaries": sorted([binary.__dict__ for binary in self.binaries]),
+        }
+        return json.dumps(json_object, sort_keys=True, separators=(",", ":"))
+
+
+def python_hash():
+    with open(sys.executable, "rb") as f:
+        return pretty_blake2b(f.read())
+
+
 def build_crates(args):
     now = datetime.now(UTC)
     registry = CargoRegistry(args.registry)
     target = rust_host_target_triple() if args.target is None else args.target
+    provenance = Provenance()
     try:
         uid = os.getuid()
         gid = os.getgid()
@@ -1167,10 +1268,21 @@ def build_crates(args):
     all_binaries = {}
     with tempfile.TemporaryDirectory(prefix="yard-") as workdir:
         workdirs = WorkDirs(Path(workdir).absolute())
-        install_rust_toolchain(workdirs, uid, gid, target, registry, args)
+        install_rust_toolchain(workdirs, uid, gid, target, args)
+        provenance.rustup = UrlInput(
+            get_rustup_init_url(args.rustup_dist_server, args.rustup_version, target),
+            f"sha256:{args.rustup_hash}",
+        )
+        provenance.rustup_dir = hash_directory(workdirs.rustup)
+        provenance.cargo_dir = hash_directory(workdirs.cargo)
         for crate in args.crates:
             candidate = find_installation_candidate(crate, registry, now, args)
             data = download_crate(candidate, crate.name, registry, args)
+            provenance.crates.append(
+                UrlInput(
+                    registry.get_download_url(candidate), f"sha256:{candidate.cksum}"
+                )
+            )
             with tempfile.TemporaryDirectory(prefix="yard-crate-") as tmpdir:
                 crate_dirs = CrateDirs(Path(tmpdir).absolute())
                 with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
@@ -1187,7 +1299,11 @@ def build_crates(args):
                         raise Error(f"Duplicate binary name: {binary}")
                     binary_path = crate_dirs.target / target / args.profile / binary
                     with open(binary_path, "rb") as file:
-                        all_binaries[binary] = file.read()
+                        contents = file.read()
+                        all_binaries[binary] = contents
+                        provenance.binaries.append(
+                            FileInput(binary, pretty_blake2b(contents))
+                        )
     sorted_binaries = sorted(all_binaries.items())
     archive_path = Path("archive.tar.gz")
     with (
@@ -1209,6 +1325,8 @@ def build_crates(args):
                     file=sys.stderr,
                 )
             tar.addfile(metadata, fileobj=io.BytesIO(contents))
+    with open("provenance.json", "w", encoding="utf-8") as f:
+        f.write(provenance.to_json())
 
 
 def main():
