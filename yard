@@ -2,6 +2,11 @@
 
 # SPDX-License-Identifier: MIT
 
+from urllib.request import Request
+from tarfile import TarFile
+from re import Pattern
+from argparse import Namespace
+from argparse import ArgumentParser
 import argparse
 import gzip
 import hashlib
@@ -47,24 +52,24 @@ RUST_KEYWORDS = [
 # fmt: on
 
 
-def is_reserved_name(name):
-    def is_windows_reserved_file_name(name):
+def is_reserved_name(name: str) -> bool:
+    def is_windows_reserved_file_name(name: str) -> bool:
         name_lower = name.lower()
         return any(name_lower.startswith(p) for p in WINDOWS_RESERVED_FILE_PREFIXES)
 
-    def is_rust_keyword(name):
+    def is_rust_keyword(name: str) -> bool:
         return any(name == keyword for keyword in RUST_KEYWORDS)
 
     return is_windows_reserved_file_name(name) or is_rust_keyword(name)
 
 
 # https://doc.rust-lang.org/cargo/reference/manifest.html#the-name-field
-def is_valid_crate_name(name):
+def is_valid_crate_name(name: str) -> bool:
     @cache
-    def crate_name_regex():
+    def crate_name_regex() -> Pattern[str]:
         return re.compile("[a-zA-Z0-9_-]{1,64}")
 
-    return not is_reserved_name(name) and crate_name_regex().match(name)
+    return not is_reserved_name(name) and crate_name_regex().fullmatch(name) is not None
 
 
 class CrateSpec:
@@ -72,7 +77,7 @@ class CrateSpec:
     version: str | None
     checksum: str | None
 
-    def __init__(self, name, version, checksum):
+    def __init__(self, name: str, version: str | None, checksum: str | None) -> None:
         if not is_valid_crate_name(name):
             raise Error(f"Invalid crate name {colorize(name, Syntax.NAME)}")
         self.name = name
@@ -93,7 +98,7 @@ class CrateSpec:
         return self.__str__() < other.__str__()
 
 
-def parse_crate_spec(spec):
+def parse_crate_spec(spec: str) -> CrateSpec:
     parts = [part.strip() for part in spec.split("@", 1)]
     if any(len(part) == 0 for part in parts):
         raise Error(
@@ -118,21 +123,21 @@ def parse_crate_spec(spec):
 is_valid_binary_name = is_valid_crate_name
 
 
-def is_valid_binary_variant(variant):
+def is_valid_binary_variant(variant: str | None) -> bool:
     @cache
-    def binary_variant_regex():
+    def binary_variant_regex() -> Pattern[str]:
         return re.compile("[a-zA-Z0-9_-]{1,64}")
 
     if variant is None:
         return True
-    return binary_variant_regex().match(variant)
+    return binary_variant_regex().fullmatch(variant) is not None
 
 
 class BinarySpec:
     name: str
     variant: str | None
 
-    def __init__(self, name, variant):
+    def __init__(self, name: str, variant: str | None) -> None:
         if not is_valid_binary_name(name):
             raise Error(f"Invalid binary name {colorize(name, Syntax.NAME)}")
         if not is_valid_binary_variant(variant):
@@ -140,7 +145,7 @@ class BinarySpec:
         self.name = name
         self.variant = variant
 
-    def __str__(self):
+    def __str__(self) -> str:
         s = self.name
         if self.variant is not None:
             s += ":"
@@ -150,7 +155,7 @@ class BinarySpec:
     def __repr__(self) -> str:
         return self.__str__()
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.name, self.variant))
 
     def __eq__(self, other) -> bool:
@@ -160,7 +165,7 @@ class BinarySpec:
         return self.__str__() < other.__str__()
 
 
-def parse_binary_spec(spec):
+def parse_binary_spec(spec: str) -> BinarySpec:
     parts = spec.split(":", 1)
     if any(len(part) == 0 for part in parts):
         raise Error(
@@ -180,10 +185,18 @@ class ArchiveSpec:
     target: str
     hash: str
     url: str
-    binaries: list[BinarySpec]
+    binaries: set[BinarySpec]
     variant: str | None
+    crate: SimpleNamespace | None
 
-    def __init__(self, target, hash, url, binaries, crate):
+    def __init__(
+        self,
+        target: str,
+        hash: str,
+        url: str,
+        binaries: set[BinarySpec],
+        crate: SimpleNamespace | None,
+    ) -> None:
         if len(binaries) == 0:
             raise Error("Archive with no binaries is not allowed")
         if not is_blake2b(hash):
@@ -219,20 +232,22 @@ class ArchiveSpec:
         return json.dumps(json_object, sort_keys=True, separators=(",", ":"))
 
 
-def parse_archive_spec(json_object, crate) -> ArchiveSpec:
-    def get_string(json_object, key) -> str:
+def parse_archive_spec(
+    json_object: dict[str, object], crate: SimpleNamespace
+) -> ArchiveSpec:
+    def get_string(json_object: dict[str, object], key: str) -> str:
         value = json_object.get(key)
         if not isinstance(value, str):
             raise Error(f"Invalid archive spec: value under `{key}` is not a string")
         return value
 
-    def get_optinoal_string(json_object, key) -> str | None:
+    def get_optinoal_string(json_object: dict[str, object], key: str) -> str | None:
         value = json_object.get(key)
         if value is not None and not isinstance(value, str):
             raise Error(f"Invalid archive spec: value under `{key}` is not a string")
         return value
 
-    def get_string_list(json_object, key) -> list[str]:
+    def get_string_list(json_object: dict[str, object], key: str) -> list[str]:
         value = json_object.get(key)
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
             raise Error(
@@ -253,24 +268,24 @@ def parse_archive_spec(json_object, crate) -> ArchiveSpec:
     )
 
 
-def blake2b(data) -> str:
+def blake2b(data: bytes) -> str:
     return hashlib.blake2b(data).hexdigest()[:64]
 
 
-def pretty_blake2b(data) -> str:
+def pretty_blake2b(data: bytes) -> str:
     return f"b2:{hashlib.blake2b(data).hexdigest()}"
 
 
-def is_blake2b(s) -> bool:
+def is_blake2b(s: str) -> bool:
     return len(s) == 64 and all(ch in string.hexdigits for ch in s)
 
 
-def is_sha256(s) -> bool:
+def is_sha256(s: str) -> bool:
     return len(s) == 64 and all(ch in string.hexdigits for ch in s)
 
 
-def hash_directory(root):
-    def h(tag, data):
+def hash_directory(root: Path) -> str:
+    def h(tag: bytes, data: bytes) -> bytes:
         hasher = hashlib.blake2b()
         hasher.update(tag)
         hasher.update(data)
@@ -286,28 +301,25 @@ def hash_directory(root):
             paths.append((1, prefix / name))
     paths.sort()
     # Compute file hashes.
-    hash = None
+    hash = hashlib.blake2b(b"").digest()
     for i, (kind, path) in enumerate(paths):
         h0 = h(b"kind", kind.to_bytes(1, byteorder="little"))
         h1 = h(b"index", i.to_bytes(4, byteorder="little"))
         h2 = h(b"path", str(path).encode("utf-8"))
         x = h(h(h0, h1), h2)
         match kind:
-            case 0:
-                y = x
             case 1:
                 with open(root / path, "rb") as f:
                     data = f.read()
                 h3 = h(b"contents", data)
                 y = h(x, h3)
-        if hash is None:
-            hash = y
-        else:
-            hash = h(hash, y)
+            case _:
+                y = x
+        hash = h(hash, y)
     return f"b2/dir:{hash.hex()}"
 
 
-def fetch_registry_config(base_url):
+def fetch_registry_config(base_url: str) -> str:
     config_url = f"{base_url}/config.json"
     try:
         with urllib.request.urlopen(create_http_request(config_url)) as response:
@@ -319,23 +331,21 @@ def fetch_registry_config(base_url):
         raise Error(
             f"Failed to fetch registry configuration from {colorize(config_url, Syntax.URL)}: {e}"
         ) from e
-    return config
-
-
-def cargo_registry_from_url(base_url):
-    config = fetch_registry_config(base_url)
-    return CargoRegistry(base_url, config)
+    return config.dl
 
 
 class CargoRegistry:
-    def __init__(self, base_url, config):
-        self.base_url = base_url
-        self.config = config
+    base_url: str
+    dl: str
 
-    def get_metadata_url(self, crate_name) -> str:
+    def __init__(self, base_url: str, dl: str) -> None:
+        self.base_url = base_url
+        self.dl = dl
+
+    def get_metadata_url(self, crate_name: str) -> str:
         return f"{self.base_url}/{get_crate_prefix(crate_name)}"
 
-    def get_download_url(self, crate) -> str:
+    def get_download_url(self, crate: SimpleNamespace) -> str:
         # https://doc.rust-lang.org/cargo/reference/registry-index.html
         prefix = get_crate_prefix(crate.name)
         markers = {
@@ -346,8 +356,8 @@ class CargoRegistry:
             "sha256-checksum": crate.cksum,
         }
         pattern = re.compile("\\{([a-z0-9-]+)\\}")
-        matches = pattern.finditer(self.config.dl)
-        url = self.config.dl
+        matches = pattern.finditer(self.dl)
+        url = self.dl
         matched = False
         for match in reversed(list(matches)):
             value = markers.get(match.group(1))
@@ -359,7 +369,12 @@ class CargoRegistry:
         return url
 
 
-def get_crate_prefix(name) -> str:
+def cargo_registry_from_url(base_url: str) -> CargoRegistry:
+    dl = fetch_registry_config(base_url)
+    return CargoRegistry(base_url, dl)
+
+
+def get_crate_prefix(name: str) -> str:
     match len(name):
         case 0:
             raise Error("Empty crate name")
@@ -373,7 +388,7 @@ def get_crate_prefix(name) -> str:
             return f"{name[:2]}/{name[2:4]}/{name}"
 
 
-def is_config_file(path) -> bool:
+def is_config_file(path: Path) -> bool:
     return (
         not path.is_absolute() and len(path.parts) == 2 and path.name == REPO_FILE_NAME
     )
@@ -431,7 +446,7 @@ def get_cargo_home() -> Path:
     return cargo_home
 
 
-def parse_duration(s):
+def parse_duration(s: str) -> timedelta:
     s = s.strip()
     if s.endswith("d"):
         s = s[:-1].strip()
@@ -455,9 +470,9 @@ class Syntax(Enum):
     CODE = 7
 
 
-def colorize(text, kind) -> str:
+def colorize(text: object, kind: Syntax) -> str:
     if not sys.stderr.isatty() and os.environ.get("CI") is None:
-        return text
+        return str(text)
     match kind:
         case Syntax.NAME | Syntax.URL | Syntax.PATH | Syntax.HASH | Syntax.VERSION:
             return f"\x1b[34m{text}\x1b[0m"
@@ -468,29 +483,29 @@ def colorize(text, kind) -> str:
         case Syntax.CODE:
             return f"\x1b[1;35m{text}\x1b[0m"
         case _:
-            return text
+            return str(text)
 
 
-def log_error(message):
+def log_error(message: str) -> None:
     print(f"{colorize('Error: ', Syntax.ERROR)}{message}", file=sys.stderr)
 
 
-def log_warning(message):
+def log_warning(message: str) -> None:
     print(f"{colorize('Warning: ', Syntax.WARNING)}{message}", file=sys.stderr)
 
 
-def get_user_agent():
+def get_user_agent() -> str:
     version = get_script_hash()[:8]
     return f"yard/{version}"
 
 
-def create_http_request(url):
+def create_http_request(url: str) -> Request:
     return urllib.request.Request(
         url, headers={"User-Agent": get_user_agent()}, method="GET"
     )
 
 
-def install_arguments(parser):
+def install_arguments(parser: ArgumentParser) -> None:
     parser.add_argument(
         "binaries",
         metavar="BINARY[:VARIANT]",
@@ -532,7 +547,7 @@ def install_arguments(parser):
     )
 
 
-def generate_arguments(parser):
+def generate_arguments(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--variant", type=str, default=None, help="Variant of the binary"
     )
@@ -558,7 +573,7 @@ def generate_arguments(parser):
     )
 
 
-def build_arguments(parser):
+def build_arguments(parser: ArgumentParser) -> None:
     parser.add_argument(
         "crates",
         metavar="CRATE[@VERSION_OR_HASH]",
@@ -601,7 +616,7 @@ def build_arguments(parser):
     )
 
 
-def parse_arguments():
+def parse_arguments() -> Namespace:
     if len(sys.argv) == 2:
         match sys.argv[1]:
             case "--version":
@@ -650,8 +665,10 @@ def parse_arguments():
     return args
 
 
-def find_installation_candidate(crate, registry, now, args):
-    def days(days):
+def find_installation_candidate(
+    crate: CrateSpec, registry: CargoRegistry, now: datetime, args: Namespace
+) -> SimpleNamespace:
+    def days(days: int) -> str:
         word = "day" if days == 1 else "days"
         return colorize(f"{days} {word}", Syntax.NAME)
 
@@ -716,7 +733,9 @@ def find_installation_candidate(crate, registry, now, args):
     return candidates[-1]
 
 
-def download_crate(candidate, crate, registry, args):
+def download_crate(
+    candidate: SimpleNamespace, crate: str, registry: CargoRegistry, args: Namespace
+) -> bytes:
     url = registry.get_download_url(candidate)
     filename = f"{crate}-{candidate.vers}.crate"
     if args.verbose:
@@ -738,7 +757,9 @@ def download_crate(candidate, crate, registry, args):
     return data
 
 
-def download_archives_metadata(candidate, crate, registry, args):
+def download_archives_metadata(
+    candidate: SimpleNamespace, crate: str, registry: CargoRegistry, args: Namespace
+) -> list[ArchiveSpec]:
     filename = f"{crate}-{candidate.vers}.crate"
     data = download_crate(candidate, crate, registry, args)
     config = None
@@ -746,8 +767,9 @@ def download_archives_metadata(candidate, crate, registry, args):
         for member in tar.getmembers():
             if not member.isfile() or not is_config_file(Path(member.name)):
                 continue
-            with tar.extractfile(member) as extracted_file:
-                if extracted_file is not None:
+            extracted_file = tar.extractfile(member)
+            if extracted_file is not None:
+                with extracted_file:
                     config = extracted_file.read()
                     break
     if config is None:
@@ -771,7 +793,9 @@ def download_archives_metadata(candidate, crate, registry, args):
     return all_archives
 
 
-def extract_binaries_from_tar_archive(data, binaries, archive_file_name):
+def extract_binaries_from_tar_archive(
+    data: bytes, binaries: set[BinarySpec], archive_file_name: str
+) -> dict[BinarySpec, bytes]:
     suffix = ".exe" if platform.system().lower() == "windows" else ""
     binaries_map = {binary.name + suffix: binary for binary in binaries}
     extracted_files = {}
@@ -787,8 +811,9 @@ def extract_binaries_from_tar_archive(data, binaries, archive_file_name):
                 raise Error(
                     f"Multiple {colorize(file_name, Syntax.PATH)} found in the archive"
                 )
-            with tar.extractfile(member) as extracted_file:
-                if extracted_file is not None:
+            extracted_file = tar.extractfile(member)
+            if extracted_file is not None:
+                with extracted_file:
                     extracted_files[binary] = extracted_file.read()
     extracted_binaries = set(extracted_files.keys())
     if extracted_binaries != binaries:
@@ -800,7 +825,9 @@ def extract_binaries_from_tar_archive(data, binaries, archive_file_name):
     return extracted_files
 
 
-def select_binaries(all_archives, target, args):
+def select_binaries(
+    all_archives: list[ArchiveSpec], target: str, args: Namespace
+) -> list[ArchiveSpec]:
     all_archives = [
         archive
         for archive in all_archives
@@ -821,7 +848,9 @@ def select_binaries(all_archives, target, args):
     return all_archives
 
 
-def install_binaries(candidates, target, args):
+def install_binaries(
+    candidates: list[ArchiveSpec], target: str, args: Namespace
+) -> None:
     candidates.sort(reverse=True, key=lambda archive: len(archive.binaries))
     cargo_bin = get_cargo_home() / "bin"
     crates = []
@@ -859,7 +888,8 @@ def install_binaries(candidates, target, args):
             )
             if not args.dry_run:
                 cargo_bin.mkdir(parents=True, exist_ok=True)
-            crates.append(f"--crate {archive.crate.name}@{archive.crate.cksum}")
+            if archive.crate is not None:
+                crates.append(f"--crate {archive.crate.name}@{archive.crate.cksum}")
             for binary, data in extracted_files.items():
                 if not args.dry_run:
                     file_name = binary.name
@@ -903,9 +933,9 @@ def install_binaries(candidates, target, args):
         print(" \\\n    ".join(lines))
 
 
-def install_crates(args):
+def install_crates(args: Namespace) -> None:
     now = datetime.now(UTC)
-    all_archives = []
+    all_archives: list[ArchiveSpec] = []
     registry = cargo_registry_from_url(args.registry)
     for crate in args.crates:
         candidate = find_installation_candidate(crate, registry, now, args)
@@ -923,14 +953,20 @@ def install_crates(args):
 
 
 class CargoPackage:
-    def __init__(self, name, version, repository, binaries):
+    name: str
+    version: str
+    repository: str | None
+    binaries: list[str]
+    files: list[Path]
+
+    def __init__(self, name, version, repository, binaries) -> None:
         self.name = name
         self.version = version
         self.repository = repository
         self.binaries = binaries
         self.files = []
 
-    def __str__(self):
+    def __str__(self) -> str:
         s = f"{self.name}"
         append = False
         match len(self.binaries):
@@ -945,7 +981,7 @@ class CargoPackage:
         return s
 
 
-def cargo_workspace_binaries():
+def cargo_workspace_binaries() -> tuple[Path, list[CargoPackage]]:
     result = subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1"],
         capture_output=True,
@@ -974,10 +1010,12 @@ def cargo_workspace_binaries():
                 )
             )
 
-    return [target_dir, crates]
+    return target_dir, crates
 
 
-def find_crate_binaries(crates, target_dir, target, args):
+def find_crate_binaries(
+    crates: list[CargoPackage], target_dir: Path, target: str, args: Namespace
+) -> None:
     for crate in crates:
         for name in crate.binaries:
             paths = [
@@ -1004,17 +1042,17 @@ def find_crate_binaries(crates, target_dir, target, args):
         crate.files.sort()
 
 
-def group_crates_into_archives(crates, target, args):
-    archives = {}
+def group_crates_into_archives(
+    crates: list[CargoPackage], target: str, args: Namespace
+) -> dict[str, SimpleNamespace]:
+    archives: dict[str, SimpleNamespace] = {}
     for crate in crates:
-        url = None
-        if args.url is not None:
-            try:
-                url = args.url.format(crate=crate, target=target)
-            except Exception as e:
-                raise Error(
-                    f"Failed to interpolate {colorize(args.url, Syntax.CODE)}: {e}"
-                ) from e
+        try:
+            url = args.url.format(crate=crate, target=target)
+        except Exception as e:
+            raise Error(
+                f"Failed to interpolate {colorize(args.url, Syntax.CODE)}: {e}"
+            ) from e
         if args.archive_name is None:
             archive_name = url.split("/")[-1]
         else:
@@ -1040,8 +1078,8 @@ def group_crates_into_archives(crates, target, args):
     return archives
 
 
-def generate_archives(args):
-    [target_dir, crates] = cargo_workspace_binaries()
+def generate_archives(args: Namespace) -> None:
+    target_dir, crates = cargo_workspace_binaries()
     target = rust_host_target_triple() if args.target is None else args.target
     find_crate_binaries(crates, target_dir, target, args)
     if args.verbose:
@@ -1085,11 +1123,11 @@ def generate_archives(args):
             )
         with open(archive_path, "rb") as file:
             hash = blake2b(file.read())
-        binaries = [
+        binaries = {
             BinarySpec(name, args.variant)
             for name in crate.binaries
             for crate in archive.crates
-        ]
+        }
         archive_specs.append(
             ArchiveSpec(
                 target=target,
@@ -1097,27 +1135,34 @@ def generate_archives(args):
                 url=archive.url,
                 hash=hash,
                 crate=None,
-            )
+            ).to_json()
         )
     archive_specs.sort()
     with open(REPO_FILE_NAME, "w", encoding="utf-8") as file:
         for spec in archive_specs:
-            print(spec.to_json(), file=file)
+            print(spec, file=file)
 
 
 class WorkDirs:
-    def __init__(self, workdir):
+    rustup: Path
+    cargo: Path
+
+    def __init__(self, workdir: Path) -> None:
         self.rustup = workdir / "rustup"
         self.cargo = workdir / "cargo"
         for path in [self.rustup, self.cargo]:
             os.makedirs(path)
 
 
-def get_rustup_init_url(rustup_dist_server, rustup_version, rust_target) -> str:
+def get_rustup_init_url(
+    rustup_dist_server: str, rustup_version: str, rust_target: str
+) -> str:
     return f"{rustup_dist_server}/rustup/archive/{rustup_version}/{rust_target}/rustup-init"
 
 
-def install_rust_toolchain(workdirs, uid, gid, target, args):
+def install_rust_toolchain(
+    workdirs: WorkDirs, uid: int, gid: int, target: str, args: Namespace
+) -> None:
     rustup_init_url = get_rustup_init_url(
         args.rustup_dist_server, args.rustup_version, target
     )
@@ -1159,14 +1204,24 @@ def install_rust_toolchain(workdirs, uid, gid, target, args):
 
 
 class CrateDirs:
-    def __init__(self, workdir):
+    src: Path
+    target: Path
+
+    def __init__(self, workdir: Path) -> None:
         self.src = workdir / "src"
         self.target = workdir / "target"
         for path in [self.src, self.target]:
             os.makedirs(path)
 
 
-def cargo_fetch(workdirs, crate_dirs, uid, gid, target, args):
+def cargo_fetch(
+    workdirs: WorkDirs,
+    crate_dirs: CrateDirs,
+    uid: int,
+    gid: int,
+    target: str,
+    args: Namespace,
+) -> None:
     docker = [
         "docker",
         "run",
@@ -1189,7 +1244,14 @@ def cargo_fetch(workdirs, crate_dirs, uid, gid, target, args):
     subprocess.run(docker + env + cargo, check=True)
 
 
-def cargo_build(workdirs, crate_dirs, uid, gid, target, args):
+def cargo_build(
+    workdirs: WorkDirs,
+    crate_dirs: CrateDirs,
+    uid: int,
+    gid: int,
+    target: str,
+    args: Namespace,
+) -> None:
     docker = [
         "docker",
         "run",
@@ -1222,7 +1284,9 @@ def cargo_build(workdirs, crate_dirs, uid, gid, target, args):
     subprocess.run(docker + env + cargo, check=True)
 
 
-def cargo_metadata_binaries(workdirs, crate_dirs, uid, gid, args):
+def cargo_metadata_binaries(
+    workdirs: WorkDirs, crate_dirs: CrateDirs, uid: int, gid: int, args: Namespace
+) -> list[str]:
     docker = [
         "docker",
         "run",
@@ -1270,10 +1334,10 @@ def cargo_metadata_binaries(workdirs, crate_dirs, uid, gid, args):
     return binaries
 
 
-def tar_members_stripped(tar):
+def tar_members_stripped(tar: TarFile):
     prefixes = []
     for member in tar.getmembers():
-        path = Path(member.path)
+        path = Path(member.name)
         if member.isfile() and path.name == "Cargo.toml":
             prefixes.append(path.parent)
     if len(prefixes) == 0:
@@ -1281,24 +1345,43 @@ def tar_members_stripped(tar):
     prefixes.sort(key=lambda path: len(path.parts))
     prefix = prefixes[0]
     for member in tar.getmembers():
-        member.path = str(Path(member.path).relative_to(prefix))
+        member.name = str(Path(member.name).relative_to(prefix))
         yield member
 
 
 class UrlInput:
-    def __init__(self, url, hash):
+    url: str
+    hash: str
+
+    def __init__(self, url: str, hash: str) -> None:
         self.url = url
         self.hash = hash
 
+    def __lt__(self, other) -> bool:
+        return (self.url, self.hash) < (other.url, other.hash)
+
 
 class FileInput:
-    def __init__(self, path, hash):
+    path: str
+    hash: str
+
+    def __init__(self, path: str, hash: str) -> None:
         self.path = path
         self.hash = hash
 
+    def __lt__(self, other) -> bool:
+        return (self.path, self.hash) < (other.path, other.hash)
+
 
 class Provenance:
-    def __init__(self):
+    python: str
+    rustup: UrlInput | None
+    rustup_dir: str | None
+    cargo_dir: str | None
+    crates: list[UrlInput]
+    binaries: list[FileInput]
+
+    def __init__(self) -> None:
         self.python = python_hash()
         self.rustup = None
         self.rustup_dir = None
@@ -1312,18 +1395,18 @@ class Provenance:
             "rustup": self.rustup.__dict__,
             "rustup_dir": self.rustup_dir,
             "cargo_dir": self.cargo_dir,
-            "crates": sorted([crate.__dict__ for crate in self.crates]),
-            "binaries": sorted([binary.__dict__ for binary in self.binaries]),
+            "crates": [crate.__dict__ for crate in sorted(self.crates)],
+            "binaries": [binary.__dict__ for binary in sorted(self.binaries)],
         }
         return json.dumps(json_object, sort_keys=True, separators=(",", ":"))
 
 
-def python_hash():
+def python_hash() -> str:
     with open(sys.executable, "rb") as f:
         return pretty_blake2b(f.read())
 
 
-def build_crates(args):
+def build_crates(args: Namespace) -> None:
     now = datetime.now(UTC)
     registry = cargo_registry_from_url(args.registry)
     target = rust_host_target_triple() if args.target is None else args.target
@@ -1401,7 +1484,7 @@ def build_crates(args):
         f.write(provenance.to_json())
 
 
-def main():
+def main() -> None:
     try:
         args = parse_arguments()
         match args.subcommand:

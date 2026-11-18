@@ -136,7 +136,7 @@ class TestCargoRegistry(unittest.TestCase):
             crate.cksum = all_markers["sha256-checksum"]
             config = SimpleNamespace()
             config.dl = "|".join(["{" + marker + "}" for marker in MARKERS])
-            registry = yard.CargoRegistry("https://registry.local", config)
+            registry = yard.CargoRegistry("https://registry.local", config.dl)
             url = registry.get_download_url(crate)
             self.assertEqual(
                 ["{" + value + "}" for value in values],

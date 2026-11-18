@@ -30,7 +30,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           check-latest: false
-      - name: Test
+      - name: Unit tests
+        run: ./ci/test.sh
+      - name: Integration tests
         run: ./test.sh
       - name: Check bootstrap command
         run: ./ci/check-bootstrap.sh
@@ -50,7 +52,9 @@ jobs:
         run: git config --global core.autocrlf false
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Test
+      - name: Unit tests
+        run: ./ci/test.sh
+      - name: Integration tests
         shell: bash
         run: ./test.sh
       - name: Check bootstrap command
