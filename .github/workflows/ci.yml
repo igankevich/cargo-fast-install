@@ -9,6 +9,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref
     }}
   cancel-in-progress: true
+env:
+  PYTHON_VERSION: "3.15"
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -21,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.15", "3.14", "3.13", "3.12", "3.11", "3.10"]
+        python-version: ["3.15", "3.14", "3.13", "3.12", "3.11"]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -30,8 +32,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           check-latest: false
-      - name: Test
-        run: ./test.sh
+      - name: Unit tests
+        run: ./ci/unit-tests.sh
+      - name: Integration tests
+        run: ./ci/integration-tests.sh
       - name: Check bootstrap command
         run: ./ci/check-bootstrap.sh
   macos:
@@ -39,8 +43,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Test
-        run: ./test.sh
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          check-latest: false
+      - name: Unit tests
+        run: ./ci/unit-tests.sh
       - name: Check bootstrap command
         run: ./ci/check-bootstrap.sh
   windows:
@@ -50,9 +59,16 @@ jobs:
         run: git config --global core.autocrlf false
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Test
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          check-latest: false
+      - name: Unit tests
+        run: ./ci/unit-tests.sh
+      - name: Integration tests
         shell: bash
-        run: ./test.sh
+        run: ./ci/integration-tests.sh
       - name: Check bootstrap command
         shell: bash
         run: ./ci/check-bootstrap.sh

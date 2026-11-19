@@ -1,13 +1,13 @@
 #!/bin/sh
 set -ex
 commit="$(git rev-parse HEAD)"
-sha256="$(sha256sum cargo-fast-install | awk '{ print $1 }')"
+sha256="$(sha256sum yard | awk '{ print $1 }')"
 mkdir -p "$HOME"/.cargo/bin
-curl -Lfo "$HOME"/.cargo/bin/cargo-fast-install "$GITHUB_SERVER_URL"/"$GITHUB_REPOSITORY"/raw/"$GITHUB_SHA"/cargo-fast-install
+curl -Lfo "$HOME"/.cargo/bin/yard "$GITHUB_SERVER_URL"/"$GITHUB_REPOSITORY"/raw/"$GITHUB_SHA"/yard
 sha256sum -c - <<EOF
-$sha256  $HOME/.cargo/bin/cargo-fast-install
+$sha256  $HOME/.cargo/bin/yard
 EOF
-chmod +x $HOME/.cargo/bin/cargo-fast-install
-cargo-fast-install --version | tee /tmp/version1
-./cargo-fast-install --version | tee /tmp/version2
+chmod +x $HOME/.cargo/bin/yard
+yard --version | tee /tmp/version1
+./yard --version | tee /tmp/version2
 diff /tmp/version1 /tmp/version2

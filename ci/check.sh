@@ -6,6 +6,7 @@ main() {
     install_ruff
     check_with_ruff
     check_with_mypy
+    check_with_pyrefly
 }
 
 install_ruff() {
@@ -19,13 +20,18 @@ EOF
 }
 
 check_with_ruff() {
-    ruff check cargo-fast-install
-    ruff format --check cargo-fast-install
+    ruff check yard
+    ruff format --check yard
 }
 
 check_with_mypy() {
     pip install mypy
-    mypy cargo-fast-install
+    mypy yard
+}
+
+check_with_pyrefly() {
+    pip install pyrefly
+    pyrefly check --output-format=github yard
 }
 
 main

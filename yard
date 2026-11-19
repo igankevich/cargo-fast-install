@@ -1,0 +1,1502 @@
+#!/usr/bin/env python3
+
+# SPDX-License-Identifier: MIT
+
+import argparse
+import gzip
+import hashlib
+import io
+import json
+import os
+import platform
+import re
+import string
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.request
+from argparse import ArgumentParser, Namespace
+from datetime import UTC, datetime, timedelta
+from enum import Enum
+from functools import cache
+from pathlib import Path
+from re import Pattern
+from tarfile import TarFile
+from types import SimpleNamespace
+from urllib.request import Request
+
+REPO_FILE_NAME = "yard.jsonl"
+
+
+class Error(Exception):
+    pass
+
+
+# https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file
+WINDOWS_RESERVED_FILE_PREFIXES = ["con", "prn", "aux", "nul", "com", "lpt"]
+
+# https://doc.rust-lang.org/reference/keywords.html
+# fmt: off
+RUST_KEYWORDS = [
+    # Strict keywords
+    "_", "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else",
+    "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match",
+    "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct",
+    "super", "trait", "true", "type", "unsafe", "use", "where", "while",
+    # Reserved keywords
+    "abstract", "become", "box", "do", "final", "gen", "macro", "override", "priv",
+    "try", "typeof", "unsized", "virtual", "yield",
+]
+# fmt: on
+
+
+def is_reserved_name(name: str) -> bool:
+    def is_windows_reserved_file_name(name: str) -> bool:
+        name_lower = name.lower()
+        return any(name_lower.startswith(p) for p in WINDOWS_RESERVED_FILE_PREFIXES)
+
+    def is_rust_keyword(name: str) -> bool:
+        return any(name == keyword for keyword in RUST_KEYWORDS)
+
+    return is_windows_reserved_file_name(name) or is_rust_keyword(name)
+
+
+# https://doc.rust-lang.org/cargo/reference/manifest.html#the-name-field
+def is_valid_crate_name(name: str) -> bool:
+    @cache
+    def crate_name_regex() -> Pattern[str]:
+        return re.compile("[a-zA-Z0-9_-]{1,64}")
+
+    return not is_reserved_name(name) and crate_name_regex().fullmatch(name) is not None
+
+
+class CrateSpec:
+    name: str
+    version: str | None
+    checksum: str | None
+
+    def __init__(self, name: str, version: str | None, checksum: str | None) -> None:
+        if not is_valid_crate_name(name):
+            raise Error(f"Invalid crate name {colorize(name, Syntax.NAME)}")
+        self.name = name
+        self.version = version
+        self.checksum = checksum
+
+    def __str__(self) -> str:
+        s = self.name
+        if self.version is not None:
+            s += "@"
+            s += self.version
+        elif self.checksum is not None:
+            s += "@"
+            s += self.checksum
+        return s
+
+    def __lt__(self, other) -> bool:
+        return self.__str__() < other.__str__()
+
+
+def parse_crate_spec(spec: str) -> CrateSpec:
+    parts = [part.strip() for part in spec.split("@", 1)]
+    if any(len(part) == 0 for part in parts):
+        raise Error(
+            f"Invalid crate spec: {colorize(spec, Syntax.NAME)}; "
+            f"expected {colorize('NAME[@VERSION_OR_HASH]', Syntax.NAME)}"
+        )
+    if len(parts) == 2:
+        name = parts[0]
+        if is_sha256(parts[1]):
+            checksum = parts[1]
+            version = None
+        else:
+            version = parts[1]
+            checksum = None
+    else:
+        name = spec
+        version = None
+        checksum = None
+    return CrateSpec(name, version, checksum)
+
+
+is_valid_binary_name = is_valid_crate_name
+
+
+def is_valid_binary_variant(variant: str | None) -> bool:
+    @cache
+    def binary_variant_regex() -> Pattern[str]:
+        return re.compile("[a-zA-Z0-9_-]{1,64}")
+
+    if variant is None:
+        return True
+    return binary_variant_regex().fullmatch(variant) is not None
+
+
+class BinarySpec:
+    name: str
+    variant: str | None
+
+    def __init__(self, name: str, variant: str | None) -> None:
+        if not is_valid_binary_name(name):
+            raise Error(f"Invalid binary name {colorize(name, Syntax.NAME)}")
+        if not is_valid_binary_variant(variant):
+            raise Error(f"Invalid binary variant {colorize(variant, Syntax.NAME)}")
+        self.name = name
+        self.variant = variant
+
+    def __str__(self) -> str:
+        s = self.name
+        if self.variant is not None:
+            s += ":"
+            s += self.variant
+        return s
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __hash__(self) -> int:
+        return hash((self.name, self.variant))
+
+    def __eq__(self, other) -> bool:
+        return (self.name, self.variant) == (other.name, other.variant)
+
+    def __lt__(self, other) -> bool:
+        return self.__str__() < other.__str__()
+
+
+def parse_binary_spec(spec: str) -> BinarySpec:
+    parts = spec.split(":", 1)
+    if any(len(part) == 0 for part in parts):
+        raise Error(
+            f"Invalid binary spec: {colorize(spec, Syntax.NAME)}; "
+            f"expected {colorize('NAME[:VARIANT]', Syntax.NAME)}"
+        )
+    if len(parts) == 2:
+        name = parts[0]
+        variant = parts[1]
+    else:
+        name = spec
+        variant = None
+    return BinarySpec(name, variant)
+
+
+class ArchiveSpec:
+    target: str
+    hash: str
+    url: str
+    binaries: set[BinarySpec]
+    variant: str | None
+    crate: SimpleNamespace | None
+
+    def __init__(
+        self,
+        target: str,
+        hash: str,
+        url: str,
+        binaries: set[BinarySpec],
+        crate: SimpleNamespace | None,
+    ) -> None:
+        if len(binaries) == 0:
+            raise Error("Archive with no binaries is not allowed")
+        if not is_blake2b(hash):
+            raise Error(
+                f"Archive hash has invalid format: {colorize(hash, Syntax.HASH)}"
+            )
+        variants = set()
+        variant = None
+        for binary in binaries:
+            variants.add(binary.variant)
+            variant = binary.variant
+        if len(variants) > 1:
+            raise Error(
+                f"Only one binary variant per archive is allowed; "
+                f"got {', '.join(colorize(variants, Syntax.NAME))}"
+            )
+        self.target = target
+        self.hash = hash
+        self.url = url
+        self.binaries = binaries
+        self.crate = crate
+        self.variant = variant
+
+    def to_json(self) -> str:
+        json_object = {
+            "target": self.target,
+            "binaries": sorted([binary.name for binary in self.binaries]),
+            "url": self.url,
+            "hash": self.hash,
+        }
+        if self.variant is not None:
+            json_object["variant"] = self.variant
+        return json.dumps(json_object, sort_keys=True, separators=(",", ":"))
+
+
+def parse_archive_spec(
+    json_object: dict[str, object], crate: SimpleNamespace
+) -> ArchiveSpec:
+    def get_string(json_object: dict[str, object], key: str) -> str:
+        value = json_object.get(key)
+        if not isinstance(value, str):
+            raise Error(f"Invalid archive spec: value under `{key}` is not a string")
+        return value
+
+    def get_optinoal_string(json_object: dict[str, object], key: str) -> str | None:
+        value = json_object.get(key)
+        if value is not None and not isinstance(value, str):
+            raise Error(f"Invalid archive spec: value under `{key}` is not a string")
+        return value
+
+    def get_string_list(json_object: dict[str, object], key: str) -> list[str]:
+        value = json_object.get(key)
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            raise Error(
+                f"Invalid archive spec: value under `{key}` is not a list of strings"
+            )
+        return value
+
+    variant = get_optinoal_string(json_object, "variant")
+    return ArchiveSpec(
+        binaries={
+            BinarySpec(name, variant=variant)
+            for name in sorted(get_string_list(json_object, "binaries"))
+        },
+        target=get_string(json_object, "target"),
+        hash=get_string(json_object, "hash"),
+        url=get_string(json_object, "url"),
+        crate=crate,
+    )
+
+
+def blake2b(data: bytes) -> str:
+    return hashlib.blake2b(data).hexdigest()[:64]
+
+
+def pretty_blake2b(data: bytes) -> str:
+    return f"b2:{hashlib.blake2b(data).hexdigest()}"
+
+
+def is_blake2b(s: str) -> bool:
+    return len(s) == 64 and all(ch in string.hexdigits for ch in s)
+
+
+def is_sha256(s: str) -> bool:
+    return len(s) == 64 and all(ch in string.hexdigits for ch in s)
+
+
+def hash_directory(root: Path) -> str:
+    def h(tag: bytes, data: bytes) -> bytes:
+        hasher = hashlib.blake2b()
+        hasher.update(tag)
+        hasher.update(data)
+        return hasher.digest()
+
+    # Find all files.
+    paths = []
+    for dir, subdirs, files in os.walk(root):
+        prefix = Path(dir).relative_to(root)
+        for name in subdirs:
+            paths.append((0, prefix / name))
+        for name in files:
+            paths.append((1, prefix / name))
+    paths.sort()
+    # Compute file hashes.
+    hash = hashlib.blake2b(b"").digest()
+    for i, (kind, path) in enumerate(paths):
+        h0 = h(b"kind", kind.to_bytes(1, byteorder="little"))
+        h1 = h(b"index", i.to_bytes(4, byteorder="little"))
+        h2 = h(b"path", str(path).encode("utf-8"))
+        x = h(h(h0, h1), h2)
+        match kind:
+            case 1:
+                with open(root / path, "rb") as f:
+                    data = f.read()
+                h3 = h(b"contents", data)
+                y = h(x, h3)
+            case _:
+                y = x
+        hash = h(hash, y)
+    return f"b2/dir:{hash.hex()}"
+
+
+def fetch_registry_config(base_url: str) -> str:
+    config_url = f"{base_url}/config.json"
+    try:
+        with urllib.request.urlopen(create_http_request(config_url)) as response:
+            data = response.read().decode("utf-8")
+            config = json.loads(data, object_hook=lambda d: SimpleNamespace(**d))
+            if not hasattr(config, "dl"):
+                raise Error(f"{colorize(config_url, Syntax.URL)} doesn't have `dl` key")
+    except Exception as e:
+        raise Error(
+            f"Failed to fetch registry configuration from {colorize(config_url, Syntax.URL)}: {e}"
+        ) from e
+    return config.dl
+
+
+class CargoRegistry:
+    base_url: str
+    dl: str
+
+    def __init__(self, base_url: str, dl: str) -> None:
+        self.base_url = base_url
+        self.dl = dl
+
+    def get_metadata_url(self, crate_name: str) -> str:
+        return f"{self.base_url}/{get_crate_prefix(crate_name)}"
+
+    def get_download_url(self, crate: SimpleNamespace) -> str:
+        # https://doc.rust-lang.org/cargo/reference/registry-index.html
+        prefix = get_crate_prefix(crate.name)
+        markers = {
+            "crate": crate.name,
+            "version": crate.vers,
+            "prefix": prefix,
+            "lowerprefix": prefix.lower(),
+            "sha256-checksum": crate.cksum,
+        }
+        pattern = re.compile("\\{([a-z0-9-]+)\\}")
+        matches = pattern.finditer(self.dl)
+        url = self.dl
+        matched = False
+        for match in reversed(list(matches)):
+            value = markers.get(match.group(1))
+            if value is not None:
+                matched = True
+                url = url[: match.start(0)] + value + url[match.end(0) :]
+        if not matched:
+            url += f"/{crate.name}/{crate.vers}/download"
+        return url
+
+
+def cargo_registry_from_url(base_url: str) -> CargoRegistry:
+    dl = fetch_registry_config(base_url)
+    return CargoRegistry(base_url, dl)
+
+
+def get_crate_prefix(name: str) -> str:
+    match len(name):
+        case 0:
+            raise Error("Empty crate name")
+        case 1:
+            return f"1/{name}"
+        case 2:
+            return f"2/{name}"
+        case 3:
+            return f"3/{name[0]}/{name}"
+        case _:
+            return f"{name[:2]}/{name[2:4]}/{name}"
+
+
+def is_config_file(path: Path) -> bool:
+    return (
+        not path.is_absolute() and len(path.parts) == 2 and path.name == REPO_FILE_NAME
+    )
+
+
+def guess_rust_host_target_triple() -> str:
+    def rust_arch() -> str:
+        match platform.machine().lower():
+            case "amd64" | "x86_64":
+                return "x86_64"
+            case "arm64" | "aarch64":
+                return "aarch64"
+            case arch:
+                return arch
+
+    arch = rust_arch()
+    match platform.system().lower():
+        case "linux":
+            libc, _ = platform.libc_ver()
+            env = "gnu" if libc == "glibc" else "musl"
+            return f"{arch}-unknown-linux-{env}"
+        case "darwin":
+            return f"{arch}-apple-darwin"
+        case "windows":
+            env = "gnu" if "mingw" in sys.version.lower() else "msvc"
+            return f"{arch}-pc-windows-{env}"
+        case system:
+            return f"{arch}-unknown-{system}"
+
+
+def rust_host_target_triple() -> str:
+    try:
+        result = subprocess.run(
+            ["rustc", "--print", "host-tuple"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return guess_rust_host_target_triple()
+
+
+def get_cargo_home() -> Path:
+    cargo_home_str = os.environ.get("CARGO_HOME", None)
+    if cargo_home_str is None:
+        home_str = os.environ.get("HOME", None)
+        if home_str is None:
+            home = Path.home()
+        else:
+            home = Path(home_str)
+        cargo_home = home / ".cargo"
+    else:
+        cargo_home = Path(cargo_home_str)
+    return cargo_home
+
+
+def parse_duration(s: str) -> timedelta:
+    s = s.strip()
+    if s.endswith("d"):
+        s = s[:-1].strip()
+    return timedelta(days=int(s))
+
+
+@cache
+def get_script_hash() -> str:
+    with open(sys.argv[0], "rb") as file:
+        return blake2b(file.read())
+
+
+class Syntax(Enum):
+    NAME = 0
+    URL = 1
+    PATH = 2
+    HASH = 3
+    ERROR = 4
+    VERSION = 5
+    WARNING = 6
+    CODE = 7
+
+
+def colorize(text: object, kind: Syntax) -> str:
+    if not sys.stderr.isatty() and os.environ.get("CI") is None:
+        return str(text)
+    match kind:
+        case Syntax.NAME | Syntax.URL | Syntax.PATH | Syntax.HASH | Syntax.VERSION:
+            return f"\x1b[34m{text}\x1b[0m"
+        case Syntax.ERROR:
+            return f"\x1b[1;31m{text}\x1b[0m"
+        case Syntax.WARNING:
+            return f"\x1b[1;33m{text}\x1b[0m"
+        case Syntax.CODE:
+            return f"\x1b[1;35m{text}\x1b[0m"
+        case _:
+            return str(text)
+
+
+def log_error(message: str) -> None:
+    print(f"{colorize('Error: ', Syntax.ERROR)}{message}", file=sys.stderr)
+
+
+def log_warning(message: str) -> None:
+    print(f"{colorize('Warning: ', Syntax.WARNING)}{message}", file=sys.stderr)
+
+
+def get_user_agent() -> str:
+    version = get_script_hash()[:8]
+    return f"yard/{version}"
+
+
+def create_http_request(url: str) -> Request:
+    return urllib.request.Request(
+        url, headers={"User-Agent": get_user_agent()}, method="GET"
+    )
+
+
+def install_arguments(parser: ArgumentParser) -> None:
+    parser.add_argument(
+        "binaries",
+        metavar="BINARY[:VARIANT]",
+        type=parse_binary_spec,
+        help="Binaries to install",
+        nargs="*",
+    )
+    parser.add_argument(
+        "--generate",
+        action="store_true",
+        help=f"Generate {REPO_FILE_NAME} instead of installing binaries",
+    )
+    parser.add_argument(
+        "--crate",
+        dest="crates",
+        metavar="CRATE[@VERSION_OR_HASH]",
+        type=parse_crate_spec,
+        action="append",
+        help="Rust crates to install binaries from. Can be specified multiple times.",
+    )
+    parser.add_argument("--target", type=str, default=None, help="Rust target triple")
+    parser.add_argument(
+        "--registry",
+        type=str,
+        default=os.environ.get("YARD_REGISTRY") or "https://index.crates.io",
+        help="Cargo registry URL",
+    )
+    parser.add_argument(
+        "--min-age",
+        metavar="DAYS",
+        type=parse_duration,
+        default=timedelta(days=7),
+        help="Minimum crate version age. Default: 7d.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Don't install the binary, but print the command to reproduce the installation",
+    )
+
+
+def generate_arguments(parser: ArgumentParser) -> None:
+    parser.add_argument(
+        "--variant", type=str, default=None, help="Variant of the binary"
+    )
+    parser.add_argument("--url", type=str, help="Archive URL template", required=True)
+    parser.add_argument(
+        "--archive-name",
+        type=str,
+        default=None,
+        help="Archive name template",
+    )
+    parser.add_argument("--target", type=str, default=None, help="Rust target triple")
+    parser.add_argument("--profile", type=str, default=None, help="Cargo profile")
+    parser.add_argument(
+        "--release", action="store_true", default=True, help="Use release profile"
+    )
+    parser.add_argument(
+        "-p",
+        "--package",
+        dest="packages",
+        type=str,
+        action="append",
+        help="Cargo packages",
+    )
+
+
+def build_arguments(parser: ArgumentParser) -> None:
+    parser.add_argument(
+        "crates",
+        metavar="CRATE[@VERSION_OR_HASH]",
+        type=parse_crate_spec,
+        nargs="*",
+        help="Rust crates to build binaries from",
+    )
+    parser.add_argument("--target", type=str, default=None, help="Rust target triple")
+    parser.add_argument("--profile", type=str, default="release", help="Cargo profile")
+    parser.add_argument(
+        "--rust-version", type=str, default="1.99.1", help="Rust version"
+    )
+    parser.add_argument(
+        "--rustup-version", type=str, default="1.29.2", help="`rustup-init` version"
+    )
+    parser.add_argument(
+        "--rustup-hash",
+        type=str,
+        default="5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4",
+        help="`rustup-init` hash",
+    )
+    parser.add_argument(
+        "--rustup-dist-server",
+        type=str,
+        default=os.environ.get("YARD_RUSTUP_DIST_SERVER")
+        or "https://static.rust-lang.org",
+        help="Rustup distribution server root URL",
+    )
+    parser.add_argument(
+        "--docker-image",
+        type=str,
+        default="rust@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137",
+        help="Docker image",
+    )
+    parser.add_argument(
+        "--registry",
+        type=str,
+        default=os.environ.get("YARD_REGISTRY") or "https://index.crates.io",
+        help="Cargo registry URL",
+    )
+
+
+def parse_arguments() -> Namespace:
+    if len(sys.argv) == 2:
+        match sys.argv[1]:
+            case "--version":
+                print(get_script_hash())
+                sys.exit(0)
+
+    parser = argparse.ArgumentParser(
+        description="Fast and secure installation of Rust binaries"
+    )
+    parser.add_argument(
+        "-q", "--quiet", action="store_true", help="Produce less output"
+    )
+    parser.add_argument("--version", action="store_true", help="Print script file hash")
+    subparsers = parser.add_subparsers(
+        dest="subcommand", metavar="COMMAND", required=True
+    )
+    build_arguments(
+        subparsers.add_parser("build", help="Build Rust crate in a sandbox")
+    )
+    generate_arguments(subparsers.add_parser("generate", help="Generate archives"))
+    install_arguments(
+        subparsers.add_parser("install", help="Install pre-built Rust binary")
+    )
+    args = parser.parse_args()
+    if args.version:
+        raise Error("Unexpected `--version` argument")
+    args.verbose = not args.quiet
+    match args.subcommand:
+        case "build":
+            args.crates = set(args.crates)
+            args.min_age = timedelta(days=0)
+        case "generate":
+            if args.release and args.profile is None:
+                args.profile = "release"
+            if args.packages is None:
+                args.packages = []
+            args.packages = sorted(set(args.packages))
+        case "install":
+            if args.crates is None:
+                args.crates = [
+                    CrateSpec(binary.name, version=None, checksum=None)
+                    for binary in args.binaries
+                ]
+            args.binaries = set(args.binaries)
+            args.crates = sorted(set(args.crates))
+    return args
+
+
+def find_installation_candidate(
+    crate: CrateSpec, registry: CargoRegistry, now: datetime, args: Namespace
+) -> SimpleNamespace:
+    def days(days: int) -> str:
+        word = "day" if days == 1 else "days"
+        return colorize(f"{days} {word}", Syntax.NAME)
+
+    url = registry.get_metadata_url(crate.name)
+    if args.verbose:
+        print(
+            f"Downloading {colorize(crate.name, Syntax.NAME)} metadata from {colorize(url, Syntax.URL)}",
+            file=sys.stderr,
+        )
+    with urllib.request.urlopen(create_http_request(url)) as response:
+        data = response.read().decode("utf-8")
+    candidates = []
+    for line in data.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        candidate = json.loads(line, object_hook=lambda d: SimpleNamespace(**d))
+        if not all(hasattr(candidate, attr) for attr in ["cksum", "pubtime", "vers"]):
+            continue
+        version_matches = crate.version is not None and candidate.vers == crate.version
+        checksum_matches = (
+            crate.checksum is not None and candidate.cksum == crate.checksum
+        )
+        if candidate.yanked:
+            if version_matches or checksum_matches:
+                log_warning(f"Crate {colorize(crate, Syntax.NAME)} was yanked")
+            continue
+        pubtime = datetime.fromisoformat(candidate.pubtime)
+        if pubtime > now:
+            log_warning(
+                f"Crate {colorize(crate, Syntax.NAME)} was published in the future: {pubtime}; current time is {now}"
+            )
+            continue
+        if pubtime + args.min_age > now:
+            if version_matches or checksum_matches:
+                log_warning(
+                    f"Crate {colorize(crate, Syntax.NAME)} was published less than {days(args.min_age.days)} ago"
+                )
+            continue
+        if crate.version is not None and not version_matches:
+            continue
+        if crate.checksum is not None and not checksum_matches:
+            continue
+        candidates.append(candidate)
+    if len(candidates) == 0:
+        if crate.version is not None:
+            message = (
+                f"Failed to find {colorize(crate.name, Syntax.NAME)} "
+                f"with version {colorize(crate.version, Syntax.VERSION)}"
+            )
+        elif crate.checksum is not None:
+            message = (
+                f"Failed to find {colorize(crate.name, Syntax.NAME)} "
+                f"with checksum {colorize(crate.checksum, Syntax.HASH)}"
+            )
+        else:
+            message = (
+                f"All available {colorize(crate.name, Syntax.NAME)} versions "
+                f"were either yanked or published less than {days(args.min_age.days)} ago"
+            )
+        raise Error(message)
+    return candidates[-1]
+
+
+def download_crate(
+    candidate: SimpleNamespace, crate: str, registry: CargoRegistry, args: Namespace
+) -> bytes:
+    url = registry.get_download_url(candidate)
+    filename = f"{crate}-{candidate.vers}.crate"
+    if args.verbose:
+        print(
+            f"Downloading {colorize(filename, Syntax.PATH)} from {colorize(url, Syntax.URL)}",
+            file=sys.stderr,
+        )
+    with urllib.request.urlopen(create_http_request(url)) as response:
+        data = response.read()
+    actual_cksum = hashlib.sha256(data).hexdigest()
+    if not actual_cksum == candidate.cksum:
+        raise Error(
+            f"{colorize(filename, Syntax.PATH)} checksum mismatch:\n"
+            f"  expected {colorize(candidate.cksum, Syntax.HASH)}\n"
+            f"    actual {colorize(actual_cksum, Syntax.HASH)}"
+        )
+    if args.verbose:
+        print(f"Verified {colorize(filename, Syntax.PATH)} checksum", file=sys.stderr)
+    return data
+
+
+def download_archives_metadata(
+    candidate: SimpleNamespace, crate: str, registry: CargoRegistry, args: Namespace
+) -> list[ArchiveSpec]:
+    filename = f"{crate}-{candidate.vers}.crate"
+    data = download_crate(candidate, crate, registry, args)
+    config = None
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
+        for member in tar.getmembers():
+            if not member.isfile() or not is_config_file(Path(member.name)):
+                continue
+            extracted_file = tar.extractfile(member)
+            if extracted_file is not None:
+                with extracted_file:
+                    config = extracted_file.read()
+                    break
+    if config is None:
+        raise Error(
+            f"Failed to extract {colorize(REPO_FILE_NAME, Syntax.PATH)} "
+            f"from {colorize(filename, Syntax.PATH)}"
+        )
+    all_archives = []
+    for line in config.decode("utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            archive = parse_archive_spec(json.loads(line), candidate)
+            all_archives.append(archive)
+        except Exception as e:
+            log_warning(
+                f"Skipping invalid archive spec from {colorize(filename, Syntax.PATH)}: "
+                f"{colorize(line, Syntax.CODE)}; {e}"
+            )
+    return all_archives
+
+
+def extract_binaries_from_tar_archive(
+    data: bytes, binaries: set[BinarySpec], archive_file_name: str
+) -> dict[BinarySpec, bytes]:
+    suffix = ".exe" if platform.system().lower() == "windows" else ""
+    binaries_map = {binary.name + suffix: binary for binary in binaries}
+    extracted_files = {}
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
+        for member in tar.getmembers():
+            file_name = Path(member.name).name
+            if not member.isfile():
+                continue
+            binary = binaries_map.get(file_name)
+            if binary is None:
+                continue
+            if binary in extracted_files:
+                raise Error(
+                    f"Multiple {colorize(file_name, Syntax.PATH)} found in the archive"
+                )
+            extracted_file = tar.extractfile(member)
+            if extracted_file is not None:
+                with extracted_file:
+                    extracted_files[binary] = extracted_file.read()
+    extracted_binaries = set(extracted_files.keys())
+    if extracted_binaries != binaries:
+        missing = sorted(binaries - extracted_binaries)
+        raise Error(
+            f"The following binaries are missing in {colorize(archive_file_name, Syntax.PATH)}: "
+            f"{', '.join([colorize(str(binary), Syntax.NAME) for binary in missing])}"
+        )
+    return extracted_files
+
+
+def select_binaries(
+    all_archives: list[ArchiveSpec], target: str, args: Namespace
+) -> list[ArchiveSpec]:
+    all_archives = [
+        archive
+        for archive in all_archives
+        if archive.target == target and not archive.binaries.isdisjoint(args.binaries)
+    ]
+    available = {binary for archive in all_archives for binary in archive.binaries}
+    if not args.binaries.issubset(available):
+        missing = sorted(args.binaries - available)
+        missing_str = ", ".join(
+            [colorize(str(binary), Syntax.NAME) for binary in missing]
+        )
+        raise Error(
+            f"The following binaries are missing in the archives: {missing_str}"
+        )
+    for binary in args.binaries:
+        for archive in all_archives:
+            archive.binaries = archive.binaries.intersection(args.binaries)
+    return all_archives
+
+
+def install_binaries(
+    candidates: list[ArchiveSpec], target: str, args: Namespace
+) -> None:
+    candidates.sort(reverse=True, key=lambda archive: len(archive.binaries))
+    cargo_bin = get_cargo_home() / "bin"
+    crates = []
+    binaries = []
+    remaining_binaries = args.binaries
+    for archive in candidates:
+        binaries_str = ", ".join(
+            [colorize(str(binary), Syntax.NAME) for binary in archive.binaries]
+        )
+        if args.verbose:
+            print(
+                f"Downloading {binaries_str} from {colorize(archive.url, Syntax.URL)}",
+                file=sys.stderr,
+            )
+        try:
+            with urllib.request.urlopen(create_http_request(archive.url)) as response:
+                archive_file_name = response.info().get_filename()
+                if archive_file_name is None:
+                    archive_file_name = archive.url.split("/")[-1]
+                data = response.read()
+            actual_hash = blake2b(data)
+            if not actual_hash == archive.hash:
+                raise Error(
+                    f"{colorize(archive_file_name, Syntax.PATH)} hash mismatch:\n"
+                    f"  expected {colorize(archive.hash, Syntax.HASH)}\n"
+                    f"    actual {colorize(actual_hash, Syntax.HASH)}"
+                )
+            if args.verbose:
+                print(
+                    f"Verified {colorize(archive_file_name, Syntax.PATH)} hash",
+                    file=sys.stderr,
+                )
+            extracted_files = extract_binaries_from_tar_archive(
+                data, archive.binaries, archive_file_name
+            )
+            if not args.dry_run:
+                cargo_bin.mkdir(parents=True, exist_ok=True)
+            if archive.crate is not None:
+                crates.append(f"--crate {archive.crate.name}@{archive.crate.cksum}")
+            for binary, data in extracted_files.items():
+                if not args.dry_run:
+                    file_name = binary.name
+                    tmp_target_file = cargo_bin / f".{file_name}.tmp"
+                    with open(tmp_target_file, "wb") as file:
+                        file.write(data)
+                        file.flush()
+                        os.fsync(file.fileno())
+                    target_file = cargo_bin / file_name
+                    target_file.unlink(missing_ok=True)
+                    tmp_target_file.rename(target_file)
+                    target_file.chmod(0o755)
+                    if args.verbose:
+                        print(
+                            f"Installed {colorize(file_name, Syntax.PATH)} "
+                            f"as {colorize(target_file, Syntax.PATH)}",
+                            file=sys.stderr,
+                        )
+                binaries.append(str(binary))
+                remaining_binaries.remove(binary)
+        except Exception as e:
+            log_error(
+                f"Failed to download {colorize(archive.url, Syntax.URL)} and install {binaries_str}: {e}"
+            )
+            continue
+        if len(remaining_binaries) == 0:
+            break
+    if len(remaining_binaries) != 0:
+        remaining_str = ", ".join(
+            [colorize(str(binary), Syntax.NAME) for binary in remaining_binaries]
+        )
+        raise Error(f"The following binaries failed to install: {remaining_str}")
+    if args.verbose or args.dry_run:
+        print(
+            "🎉 Done!\n\nUse the following command to reproduce the installation:\n",
+            file=sys.stderr,
+        )
+        lines = [f"yard --target {target}"]
+        lines += sorted(crates)
+        lines.append(" ".join(sorted(binaries)))
+        print(" \\\n    ".join(lines))
+
+
+def install_crates(args: Namespace) -> None:
+    now = datetime.now(UTC)
+    all_archives: list[ArchiveSpec] = []
+    registry = cargo_registry_from_url(args.registry)
+    for crate in args.crates:
+        candidate = find_installation_candidate(crate, registry, now, args)
+        try:
+            all_archives += download_archives_metadata(
+                candidate, crate.name, registry, args
+            )
+        except Exception as e:
+            raise Error(
+                f"Failed to download archives metadata for {colorize(crate.name, Syntax.NAME)}: {e}"
+            ) from e
+    target = rust_host_target_triple() if args.target is None else args.target
+    candidates = select_binaries(all_archives, target, args)
+    install_binaries(candidates, target, args)
+
+
+class CargoPackage:
+    name: str
+    version: str
+    repository: str | None
+    binaries: list[str]
+    files: list[Path]
+
+    def __init__(self, name, version, repository, binaries) -> None:
+        self.name = name
+        self.version = version
+        self.repository = repository
+        self.binaries = binaries
+        self.files = []
+
+    def __str__(self) -> str:
+        s = f"{self.name}"
+        append = False
+        match len(self.binaries):
+            case 0:
+                pass
+            case 1:
+                append = self.binaries[0] != self.name
+            case _:
+                append = True
+        if append:
+            s += f" ({', '.join(self.binaries)})"
+        return s
+
+
+def cargo_workspace_binaries() -> tuple[Path, list[CargoPackage]]:
+    result = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    metadata = json.loads(result.stdout.strip())
+    target_dir = Path(metadata["target_directory"])
+    crates = []
+    for package in metadata["packages"]:
+        binaries = []
+        for target in package["targets"]:
+            if "bin" not in target["kind"]:
+                continue
+            if "bin" not in target["crate_types"]:
+                continue
+            binaries.append(target["name"])
+        if len(binaries) != 0:
+            binaries.sort()
+            crates.append(
+                CargoPackage(
+                    package["name"],
+                    package["version"],
+                    package.get("repository"),
+                    binaries,
+                )
+            )
+
+    return target_dir, crates
+
+
+def find_crate_binaries(
+    crates: list[CargoPackage], target_dir: Path, target: str, args: Namespace
+) -> None:
+    for crate in crates:
+        for name in crate.binaries:
+            paths = [
+                target_dir / args.profile / name,
+                target_dir / target / args.profile / name,
+            ]
+            if platform.system().lower() == "windows":
+                paths = [path.with_suffix(".exe") for path in paths]
+            found = None
+            for path in paths:
+                if path.is_file() and os.access(path, os.X_OK):
+                    if found is not None:
+                        raise Error(
+                            f"Binary {colorize(name, Syntax.NAME)} found in multiple locations:\n"
+                            f"- {colorize(found, Syntax.PATH)}\n- {colorize(path, Syntax.PATH)}"
+                        )
+                    found = path
+            if found is None:
+                raise Error(
+                    f"Binary {colorize(name, Syntax.NAME)} not found; "
+                    f"tried {colorize(paths[0], Syntax.PATH)} and {colorize(paths[1], Syntax.PATH)}"
+                )
+            crate.files.append(found)
+        crate.files.sort()
+
+
+def group_crates_into_archives(
+    crates: list[CargoPackage], target: str, args: Namespace
+) -> dict[str, SimpleNamespace]:
+    archives: dict[str, SimpleNamespace] = {}
+    for crate in crates:
+        try:
+            url = args.url.format(crate=crate, target=target)
+        except Exception as e:
+            raise Error(
+                f"Failed to interpolate {colorize(args.url, Syntax.CODE)}: {e}"
+            ) from e
+        if args.archive_name is None:
+            archive_name = url.split("/")[-1]
+        else:
+            archive_name = args.archive_name.format(crate=crate, target=target)
+        if archive_name in archives:
+            archives[archive_name].crates.append(crate)
+        else:
+            archive = SimpleNamespace()
+            archive.url = url
+            archive.crates = [crate]
+            archives[archive_name] = archive
+    for archive_name, archive in archives.items():
+        file_names = set()
+        for crate in archive.crates:
+            for file in crate.files:
+                if file.name in file_names:
+                    raise Error(
+                        f"Multiple binaries with the same name in {colorize(archive_name, Syntax.PATH)}: "
+                        f"{colorize(file.name, Syntax.PATH)}"
+                    )
+                file_names.add(file.name)
+        archive.crates.sort()
+    return archives
+
+
+def generate_archives(args: Namespace) -> None:
+    target_dir, crates = cargo_workspace_binaries()
+    target = rust_host_target_triple() if args.target is None else args.target
+    find_crate_binaries(crates, target_dir, target, args)
+    if args.verbose:
+        print(f"Target: {target}", file=sys.stderr)
+        print(f"Profile: {args.profile}", file=sys.stderr)
+        print(f"Crates: {', '.join([str(crate) for crate in crates])}", file=sys.stderr)
+    archives = group_crates_into_archives(crates, target, args)
+    archive_specs = []
+    for archive_name, archive in archives.items():
+        extension = archive_name.split(".")[-1]
+        if not extension == "gz":
+            raise Error("Only tar.gz archives are currently supported")
+        archive_path = Path(archive_name)
+        with (
+            gzip.GzipFile(archive_path, "wb", mtime=0, compresslevel=9) as gzip_file,
+            tarfile.open(fileobj=gzip_file, mode="w:") as tar,
+        ):
+            for crate in archive.crates:
+                for path in crate.files:
+                    metadata = tarfile.TarInfo(name=path.name)
+                    metadata.mtime = 0
+                    metadata.mode = 0o755
+                    metadata.uid = 0
+                    metadata.gid = 0
+                    metadata.uname = "root"
+                    metadata.gname = "root"
+                    if args.verbose:
+                        print(
+                            f"Adding {colorize(path, Syntax.PATH)} to {colorize(archive_name, Syntax.NAME)}",
+                            file=sys.stderr,
+                        )
+                    with open(path, "rb") as file:
+                        contents = file.read()
+                        metadata.size = len(contents)
+                        tar.addfile(metadata, fileobj=io.BytesIO(contents))
+        if args.verbose:
+            print(
+                f"Packaged {', '.join([colorize(crate, Syntax.NAME) for crate in archive.crates])} "
+                f"as {colorize(archive_path, Syntax.PATH)}",
+                file=sys.stderr,
+            )
+        with open(archive_path, "rb") as file:
+            hash = blake2b(file.read())
+        binaries = {
+            BinarySpec(name, args.variant)
+            for name in crate.binaries
+            for crate in archive.crates
+        }
+        archive_specs.append(
+            ArchiveSpec(
+                target=target,
+                binaries=binaries,
+                url=archive.url,
+                hash=hash,
+                crate=None,
+            ).to_json()
+        )
+    archive_specs.sort()
+    with open(REPO_FILE_NAME, "w", encoding="utf-8") as file:
+        for spec in archive_specs:
+            print(spec, file=file)
+
+
+class WorkDirs:
+    rustup: Path
+    cargo: Path
+
+    def __init__(self, workdir: Path) -> None:
+        self.rustup = workdir / "rustup"
+        self.cargo = workdir / "cargo"
+        for path in [self.rustup, self.cargo]:
+            os.makedirs(path)
+
+
+def get_rustup_init_url(
+    rustup_dist_server: str, rustup_version: str, rust_target: str
+) -> str:
+    return f"{rustup_dist_server}/rustup/archive/{rustup_version}/{rust_target}/rustup-init"
+
+
+def install_rust_toolchain(
+    workdirs: WorkDirs, uid: int, gid: int, target: str, args: Namespace
+) -> None:
+    rustup_init_url = get_rustup_init_url(
+        args.rustup_dist_server, args.rustup_version, target
+    )
+    rustup_script = """
+    set -e
+    curl -Lfo /rustup/rustup-init "$rustup_init_url"
+    echo "$rustup_hash /rustup/rustup-init" >/rustup/rustup-init-hash
+    sha256sum -c /rustup/rustup-init-hash
+    chmod +x /rustup/rustup-init
+    /rustup/rustup-init --yes --quiet --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" --default-host "$RUST_TARGET"
+    rm /rustup/rustup-init /rustup/rustup-init-hash
+    """
+    subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            f"--user={uid}:{gid}",
+            f"--volume={workdirs.cargo}:/cargo:rw",
+            f"--volume={workdirs.rustup}:/rustup:rw",
+            args.docker_image,
+            "/usr/bin/env",
+            "-i",
+            f"RUST_VERSION={args.rust_version}",
+            f"RUST_TARGET={target}",
+            "CARGO_HOME=/cargo",
+            "RUSTUP_HOME=/rustup",
+            f"RUSTUP_DIST_SERVER={args.rustup_dist_server}",
+            f"RUSTUP_VERSION={args.rustup_version}",
+            f"rustup_hash={args.rustup_hash}",
+            f"rustup_init_url={rustup_init_url}",
+            "PATH=/cargo/bin:/usr/bin",
+            "/bin/sh",
+            "-c",
+            rustup_script,
+        ],
+        check=True,
+    )
+
+
+class CrateDirs:
+    src: Path
+    target: Path
+
+    def __init__(self, workdir: Path) -> None:
+        self.src = workdir / "src"
+        self.target = workdir / "target"
+        for path in [self.src, self.target]:
+            os.makedirs(path)
+
+
+def cargo_fetch(
+    workdirs: WorkDirs,
+    crate_dirs: CrateDirs,
+    uid: int,
+    gid: int,
+    target: str,
+    args: Namespace,
+) -> None:
+    docker = [
+        "docker",
+        "run",
+        "--rm",
+        f"--user={uid}:{gid}",
+        f"--volume={workdirs.cargo}:/cargo:rw",
+        f"--volume={workdirs.rustup}:/rustup:ro",
+        f"--volume={crate_dirs.src}:/src:ro",
+        "--workdir=/src",
+        args.docker_image,
+    ]
+    env = [
+        "/usr/bin/env",
+        "-i",
+        "CARGO_HOME=/cargo",
+        "RUSTUP_HOME=/rustup",
+        "PATH=/cargo/bin:/usr/bin",
+    ]
+    cargo = ["cargo", "fetch", "--locked", f"--target={target}"]
+    subprocess.run(docker + env + cargo, check=True)
+
+
+def cargo_build(
+    workdirs: WorkDirs,
+    crate_dirs: CrateDirs,
+    uid: int,
+    gid: int,
+    target: str,
+    args: Namespace,
+) -> None:
+    docker = [
+        "docker",
+        "run",
+        "--rm",
+        f"--user={uid}:{gid}",
+        f"--volume={workdirs.cargo}:/cargo:ro",
+        f"--volume={workdirs.rustup}:/rustup:ro",
+        f"--volume={crate_dirs.src}:/src:ro",
+        f"--volume={crate_dirs.target}:/target:rw",
+        "--workdir=/src",
+        "--network=none",
+        args.docker_image,
+    ]
+    env = [
+        "/usr/bin/env",
+        "-i",
+        "CARGO_HOME=/cargo",
+        "RUSTUP_HOME=/rustup",
+        "PATH=/cargo/bin:/usr/bin",
+    ]
+    cargo = [
+        "cargo",
+        "build",
+        "--locked",
+        "--offline",
+        f"--target={target}",
+        f"--profile={args.profile}",
+        "--target-dir=/target",
+    ]
+    subprocess.run(docker + env + cargo, check=True)
+
+
+def cargo_metadata_binaries(
+    workdirs: WorkDirs, crate_dirs: CrateDirs, uid: int, gid: int, args: Namespace
+) -> list[str]:
+    docker = [
+        "docker",
+        "run",
+        "--rm",
+        f"--user={uid}:{gid}",
+        f"--volume={workdirs.cargo}:/cargo:ro",
+        f"--volume={workdirs.rustup}:/rustup:ro",
+        f"--volume={crate_dirs.src}:/src:ro",
+        f"--volume={crate_dirs.target}:/target:ro",
+        "--workdir=/src",
+        "--network=none",
+        args.docker_image,
+    ]
+    env = [
+        "/usr/bin/env",
+        "-i",
+        "CARGO_HOME=/cargo",
+        "RUSTUP_HOME=/rustup",
+        "PATH=/cargo/bin:/usr/bin",
+    ]
+    cargo = [
+        "cargo",
+        "metadata",
+        "--locked",
+        "--offline",
+        "--no-deps",
+        "--format-version=1",
+    ]
+    result = subprocess.run(
+        docker + env + cargo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    metadata = json.loads(result.stdout.strip())
+    binaries = []
+    for package in metadata["packages"]:
+        for t in package["targets"]:
+            if "bin" not in t["kind"]:
+                continue
+            if "bin" not in t["crate_types"]:
+                continue
+            binaries.append(t["name"])
+    binaries.sort()
+    return binaries
+
+
+def tar_members_stripped(tar: TarFile):
+    prefixes = []
+    for member in tar.getmembers():
+        path = Path(member.name)
+        if member.isfile() and path.name == "Cargo.toml":
+            prefixes.append(path.parent)
+    if len(prefixes) == 0:
+        raise Error("Failed to find `Cargo.toml` in the crate archive")
+    prefixes.sort(key=lambda path: len(path.parts))
+    prefix = prefixes[0]
+    for member in tar.getmembers():
+        member.name = str(Path(member.name).relative_to(prefix))
+        yield member
+
+
+class UrlInput:
+    url: str
+    hash: str
+
+    def __init__(self, url: str, hash: str) -> None:
+        self.url = url
+        self.hash = hash
+
+    def __lt__(self, other) -> bool:
+        return (self.url, self.hash) < (other.url, other.hash)
+
+
+class FileInput:
+    path: str
+    hash: str
+
+    def __init__(self, path: str, hash: str) -> None:
+        self.path = path
+        self.hash = hash
+
+    def __lt__(self, other) -> bool:
+        return (self.path, self.hash) < (other.path, other.hash)
+
+
+class Provenance:
+    python: str
+    rustup: UrlInput | None
+    rustup_dir: str | None
+    cargo_dir: str | None
+    crates: list[UrlInput]
+    binaries: list[FileInput]
+
+    def __init__(self) -> None:
+        self.python = python_hash()
+        self.rustup = None
+        self.rustup_dir = None
+        self.cargo_dir = None
+        self.crates = []
+        self.binaries = []
+
+    def to_json(self) -> str:
+        json_object = {
+            "python": self.python,
+            "rustup": self.rustup.__dict__,
+            "rustup_dir": self.rustup_dir,
+            "cargo_dir": self.cargo_dir,
+            "crates": [crate.__dict__ for crate in sorted(self.crates)],
+            "binaries": [binary.__dict__ for binary in sorted(self.binaries)],
+        }
+        return json.dumps(json_object, sort_keys=True, separators=(",", ":"))
+
+
+def python_hash() -> str:
+    with open(sys.executable, "rb") as f:
+        return pretty_blake2b(f.read())
+
+
+def build_crates(args: Namespace) -> None:
+    now = datetime.now(UTC)
+    registry = cargo_registry_from_url(args.registry)
+    target = rust_host_target_triple() if args.target is None else args.target
+    provenance = Provenance()
+    try:
+        uid = os.getuid()
+        gid = os.getgid()
+    except AttributeError:
+        uid = 0
+        gid = 0
+    if uid == 0:
+        uid = 65534
+        gid = 65534
+    all_binaries = {}
+    with tempfile.TemporaryDirectory(prefix="yard-") as workdir:
+        workdirs = WorkDirs(Path(workdir).absolute())
+        install_rust_toolchain(workdirs, uid, gid, target, args)
+        provenance.rustup = UrlInput(
+            get_rustup_init_url(args.rustup_dist_server, args.rustup_version, target),
+            f"sha256:{args.rustup_hash}",
+        )
+        provenance.rustup_dir = hash_directory(workdirs.rustup)
+        provenance.cargo_dir = hash_directory(workdirs.cargo)
+        for crate in args.crates:
+            candidate = find_installation_candidate(crate, registry, now, args)
+            data = download_crate(candidate, crate.name, registry, args)
+            provenance.crates.append(
+                UrlInput(
+                    registry.get_download_url(candidate), f"sha256:{candidate.cksum}"
+                )
+            )
+            with tempfile.TemporaryDirectory(prefix="yard-crate-") as tmpdir:
+                crate_dirs = CrateDirs(Path(tmpdir).absolute())
+                with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
+                    tar.extractall(
+                        members=tar_members_stripped(tar),
+                        path=crate_dirs.src,
+                        filter="data",
+                    )
+                cargo_fetch(workdirs, crate_dirs, uid, gid, target, args)
+                cargo_build(workdirs, crate_dirs, uid, gid, target, args)
+                binaries = cargo_metadata_binaries(workdirs, crate_dirs, uid, gid, args)
+                for binary in binaries:
+                    if binary in all_binaries:
+                        raise Error(f"Duplicate binary name: {binary}")
+                    binary_path = crate_dirs.target / target / args.profile / binary
+                    with open(binary_path, "rb") as file:
+                        contents = file.read()
+                        all_binaries[binary] = contents
+                        provenance.binaries.append(
+                            FileInput(binary, pretty_blake2b(contents))
+                        )
+    sorted_binaries = sorted(all_binaries.items())
+    archive_path = Path("archive.tar.gz")
+    with (
+        gzip.GzipFile(archive_path, "wb", mtime=0, compresslevel=9) as gzip_file,
+        tarfile.open(fileobj=gzip_file, mode="w:") as tar,
+    ):
+        for file_name, contents in sorted_binaries:
+            metadata = tarfile.TarInfo(name=file_name)
+            metadata.mtime = 0
+            metadata.mode = 0o755
+            metadata.uid = 0
+            metadata.gid = 0
+            metadata.uname = "root"
+            metadata.gname = "root"
+            metadata.size = len(contents)
+            if args.verbose:
+                print(
+                    f"Adding {colorize(file_name, Syntax.PATH)} to {colorize(archive_path.name, Syntax.NAME)}",
+                    file=sys.stderr,
+                )
+            tar.addfile(metadata, fileobj=io.BytesIO(contents))
+    with open("provenance.json", "w", encoding="utf-8") as f:
+        f.write(provenance.to_json())
+
+
+def main() -> None:
+    try:
+        args = parse_arguments()
+        match args.subcommand:
+            case "build":
+                build_crates(args)
+            case "generate":
+                generate_archives(args)
+            case "install":
+                install_crates(args)
+    except Exception as e:
+        log_error(f"{e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
