@@ -2,11 +2,6 @@
 
 # SPDX-License-Identifier: MIT
 
-from urllib.request import Request
-from tarfile import TarFile
-from re import Pattern
-from argparse import Namespace
-from argparse import ArgumentParser
 import argparse
 import gzip
 import hashlib
@@ -21,11 +16,15 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
-from datetime import UTC, datetime, timedelta
+from argparse import ArgumentParser, Namespace
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from functools import cache
 from pathlib import Path
+from re import Pattern
+from tarfile import TarFile
 from types import SimpleNamespace
+from urllib.request import Request
 
 REPO_FILE_NAME = "yard.jsonl"
 
@@ -934,7 +933,7 @@ def install_binaries(
 
 
 def install_crates(args: Namespace) -> None:
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.UTC)
     all_archives: list[ArchiveSpec] = []
     registry = cargo_registry_from_url(args.registry)
     for crate in args.crates:
@@ -1407,7 +1406,7 @@ def python_hash() -> str:
 
 
 def build_crates(args: Namespace) -> None:
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.UTC)
     registry = cargo_registry_from_url(args.registry)
     target = rust_host_target_triple() if args.target is None else args.target
     provenance = Provenance()
