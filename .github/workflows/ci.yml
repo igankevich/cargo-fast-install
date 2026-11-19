@@ -41,8 +41,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Test
-        run: ./test.sh
+      - name: Unit tests
+        run: ./ci/unit-tests.sh
       - name: Check bootstrap command
         run: ./ci/check-bootstrap.sh
   windows:
