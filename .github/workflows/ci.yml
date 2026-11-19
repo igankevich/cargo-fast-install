@@ -31,9 +31,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
           check-latest: false
       - name: Unit tests
-        run: ./ci/test.sh
+        run: ./ci/unit-tests.sh
       - name: Integration tests
-        run: ./test.sh
+        run: ./integration-tests.sh
       - name: Check bootstrap command
         run: ./ci/check-bootstrap.sh
   macos:
@@ -53,10 +53,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Unit tests
-        run: ./ci/test.sh
+        run: ./ci/unit-tests.sh
       - name: Integration tests
         shell: bash
-        run: ./test.sh
+        run: ./integration-tests.sh
       - name: Check bootstrap command
         shell: bash
         run: ./ci/check-bootstrap.sh
