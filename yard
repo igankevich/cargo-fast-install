@@ -17,7 +17,7 @@ import tarfile
 import tempfile
 import urllib.request
 from argparse import ArgumentParser, Namespace
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from functools import cache
 from pathlib import Path
@@ -933,7 +933,7 @@ def install_binaries(
 
 
 def install_crates(args: Namespace) -> None:
-    now = datetime.now(timezone.UTC)
+    now = datetime.now(UTC)
     all_archives: list[ArchiveSpec] = []
     registry = cargo_registry_from_url(args.registry)
     for crate in args.crates:
@@ -1406,7 +1406,7 @@ def python_hash() -> str:
 
 
 def build_crates(args: Namespace) -> None:
-    now = datetime.now(timezone.UTC)
+    now = datetime.now(UTC)
     registry = cargo_registry_from_url(args.registry)
     target = rust_host_target_triple() if args.target is None else args.target
     provenance = Provenance()
