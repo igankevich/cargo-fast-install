@@ -1,4 +1,4 @@
 #!/bin/sh
 set -e
 pip install hypothesis
-./yard-test.py -v
+./tests/yard.py -v
