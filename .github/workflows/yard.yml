@@ -54,7 +54,7 @@ jobs:
           cat /etc/docker/daemon.json || true
           cat /etc/resolv.conf
           docker run --rm ${{ inputs.docker-image }} cat /etc/resolv.conf
-          docker run --rm ${{ inputs.docker-image }} --add-host=host.docker.internal:host-gateway curl -Lfv https://static.rust-lang.org
+          docker run --rm --add-host=host.docker.internal:host-gateway ${{ inputs.docker-image }} curl -Lfv https://static.rust-lang.org
       - name: Build `${{ inputs.crates }}` with `yard`
         env:
           # https://quad9.net/service/service-addresses-and-features/
