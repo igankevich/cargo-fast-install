@@ -586,9 +586,9 @@ def build_arguments(parser: ArgumentParser) -> None:
     def default_docker_image():
         hashes = {
             # amd64
-            "x86_64-unknown-linux-gnu": "buildpack-deps@sha256:797d38a001a134da4588a09a419cbaec975ac92e9b0d63a7eb27609eb20e945a",
+            "x86_64-unknown-linux-gnu": "buildpack-deps@sha256:cba7fa3c133e3110d747518182a10a8f969691e6788abea5f454ce7f83de1542",
             # arm64-v8
-            "aarch64-unknown-linux-gnu": "buildpack-deps@sha256:fd412096dae84f55793a124e8e4bfd54e693d14baa95b67ed9db1ab62316b1fc",
+            "aarch64-unknown-linux-gnu": "buildpack-deps@sha256:f719cedddb6ca673716cb4564b9298bbaa7fea8b4ae8a78e4ead2b2299ed6c62",
         }
         return hashes.get(rust_host_target_triple())
 
