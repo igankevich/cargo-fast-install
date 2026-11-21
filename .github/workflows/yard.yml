@@ -56,16 +56,18 @@ jobs:
           ip -brief -color address
           ip -brief -color link
           ip -brief -color route
+          resolvectl status || true
           # https://quad9.net/service/service-addresses-and-features/
-          sudo rm /etc/resolv.conf
           cat >/tmp/resolv.conf << EOF
           nameserver 9.9.9.9
           nameserver 149.112.112.112
           nameserver 2620:fe::fe
           nameserver 2620:fe::9
           EOF
+          sudo rm /etc/resolv.conf
           sudo mv /tmp/resolv.conf /etc/resolv.conf
           cat /etc/resolv.conf
+          curl -Lfv https://static.rust-lang.org
           echo ${{ job.container.network }}
           docker run --rm ${{ inputs.docker-image }} cat /etc/resolv.conf
           docker run --rm ${{ inputs.docker-image }} getent hosts static.rust-lang.org || true
