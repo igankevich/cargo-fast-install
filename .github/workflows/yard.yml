@@ -10,27 +10,21 @@ on:
       target:
         type: string
         required: false
-        default: x86_64-unknown-linux-gnu
       profile:
         type: string
         required: false
-        default: release
       rustup-version:
         type: string
         required: false
-        default: "1.29.2"
       rustup-hash:
         type: string
         required: false
-        default: "5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4"
       rust-version:
         type: string
         required: false
-        default: "1.100.0"
       docker-image:
         type: string
         required: false
-        default: "rust@sha256:ebc54bef33ec8f9a5cd05799366010f35efbb73b354fb4f2cb086ec6b9460ef5"
     outputs:
       archive:
         value: ${{ jobs.yarn-build.outputs.output1 }}
@@ -49,14 +43,21 @@ jobs:
           curl -Lf -o yard https://github.com/igankevich/yard/raw/${{ github.workflow_sha }}/yard
           chmod +x yard
       - name: Build `${{ inputs.crates }}` with `yard`
+        env:
+          target: ${{ inputs.target }}
+          profile: ${{ inputs.profile }}
+          rustup_version: ${{ inputs.rustup-version }}
+          rustup_hash: ${{ inputs.rustup-hash }}
+          rust_version: ${{ inputs.rust-version }}
+          docker_image: ${{ inputs.docker-image }}
         run: |
           ./yard build \
-            --rustup-version ${{ inputs.rustup-version }} \
-            --rustup-hash ${{ inputs.rustup-hash }} \
-            --rust-version ${{ inputs.rust-version }} \
-            --docker-image ${{ inputs.docker-image }} \
-            --target ${{ inputs.target }} \
-            --profile ${{ inputs.profile }} \
+            ${rustup_version:+--rustup-version "$rustup_version"} \
+            ${rustup_hash:+--rustup-hash "$rustup_hash"} \
+            ${rust_version:+--rust-version "$rust_version} \
+            ${docker_image:+--docker-image "$docker_image"} \
+            ${target:+--target "$target"} \
+            ${profile:+--profile "$profile"} \
             ${{ inputs.crates }}
       - name: Attest artifacts
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
