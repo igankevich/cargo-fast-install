@@ -65,6 +65,8 @@ jobs:
           subject-path: |
             archive.tar.gz
             provenance.json
+      - name: Copy attestation
+        run: cp ${{ steps.attest.outputs.bundle-path }} attestation.json
       - name: Upload artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -74,4 +76,4 @@ jobs:
           path: |
             archive.tar.gz
             provenance.json
-            ${{ steps.attest.outputs.bundle-path }}
+            attestation.json
