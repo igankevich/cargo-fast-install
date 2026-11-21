@@ -1196,7 +1196,7 @@ def install_rust_toolchain(
             f"--volume={workdirs.cargo}:/cargo:rw",
             f"--volume={workdirs.rustup}:/rustup:rw",
         ]
-        + [arg for arg in ["--dns", addr] for addr in args.docker_dns]
+        + [arg for addr in args.docker_dns for arg in ["--dns", addr]]
         + [args.docker_image]
     )
     env = [
