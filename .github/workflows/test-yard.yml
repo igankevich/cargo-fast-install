@@ -1,0 +1,23 @@
+---
+name: Test reusable workflow
+
+on:
+  push:
+    branches: [master]
+    tags: ['*']
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref
+    }}
+  cancel-in-progress: true
+
+jobs:
+  call-yard-worflow:
+    permissions:
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    uses: igankevich/yard/.github/workflows/yard.yml@yard-workflow
+    with:
+      crates: kpea-cli
