@@ -418,6 +418,7 @@ def guess_rust_host_target_triple() -> str:
             return f"{arch}-unknown-{system}"
 
 
+@cache
 def rust_host_target_triple() -> str:
     try:
         result = subprocess.run(
@@ -573,6 +574,24 @@ def generate_arguments(parser: ArgumentParser) -> None:
 
 
 def build_arguments(parser: ArgumentParser) -> None:
+    def default_rustup_hash():
+        # https://github.com/rust-lang/docker-rust/blob/df656acca65532667d6df2bd6193457d9404bc02/x.py#L75
+        # curl https://static.rust-lang.org/rustup/archive/{rustup_version}/{arch}/rustup-init.sha256
+        hashes = {
+            "x86_64-unknown-linux-gnu": "5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4",
+            "aarch64-unknown-linux-gnu": "9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282",
+        }
+        return hashes.get(rust_host_target_triple())
+
+    def default_docker_image():
+        hashes = {
+            # amd64
+            "x86_64-unknown-linux-gnu": "sha256:797d38a001a134da4588a09a419cbaec975ac92e9b0d63a7eb27609eb20e945a",
+            # arm64-v8
+            "aarch64-unknown-linux-gnu": "sha256:fd412096dae84f55793a124e8e4bfd54e693d14baa95b67ed9db1ab62316b1fc",
+        }
+        return hashes.get(rust_host_target_triple())
+
     parser.add_argument(
         "crates",
         metavar="CRATE[@VERSION_OR_HASH]",
@@ -583,7 +602,7 @@ def build_arguments(parser: ArgumentParser) -> None:
     parser.add_argument("--target", type=str, default=None, help="Rust target triple")
     parser.add_argument("--profile", type=str, default="release", help="Cargo profile")
     parser.add_argument(
-        "--rust-version", type=str, default="1.100", help="Rust version"
+        "--rust-version", type=str, default="1.100.0", help="Rust version"
     )
     parser.add_argument(
         "--rustup-version", type=str, default="1.29.2", help="`rustup-init` version"
@@ -591,9 +610,7 @@ def build_arguments(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--rustup-hash",
         type=str,
-        # TODO should be based on host architecture
-        default="5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4",
-        #default="2ba97d668c06dc4b1884f2a3fa6f4cf14b9bd0c1db379af7e4f87a705ff19edd",
+        default=default_rustup_hash(),
         help="`rustup-init` hash",
     )
     parser.add_argument(
@@ -606,8 +623,7 @@ def build_arguments(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--docker-image",
         type=str,
-        # TODO should be based on host architecture
-        default="rust@sha256:ebc54bef33ec8f9a5cd05799366010f35efbb73b354fb4f2cb086ec6b9460ef5",
+        default=default_docker_image(),
         help="Docker image",
     )
     parser.add_argument(
@@ -626,7 +642,8 @@ def parse_arguments() -> Namespace:
                 sys.exit(0)
 
     parser = argparse.ArgumentParser(
-        description="Fast and secure installation of Rust binaries"
+        description="Fast and secure installation of Rust binaries",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "-q", "--quiet", action="store_true", help="Produce less output"
@@ -636,11 +653,25 @@ def parse_arguments() -> Namespace:
         dest="subcommand", metavar="COMMAND", required=True
     )
     build_arguments(
-        subparsers.add_parser("build", help="Build Rust crate in a sandbox")
+        subparsers.add_parser(
+            "build",
+            help="Build Rust crate in a sandbox",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
     )
-    generate_arguments(subparsers.add_parser("generate", help="Generate archives"))
+    generate_arguments(
+        subparsers.add_parser(
+            "generate",
+            help="Generate archives",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
+    )
     install_arguments(
-        subparsers.add_parser("install", help="Install pre-built Rust binary")
+        subparsers.add_parser(
+            "install",
+            help="Install pre-built Rust binary",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
     )
     args = parser.parse_args()
     if args.version:
@@ -1184,7 +1215,6 @@ def install_rust_toolchain(
         f"--user={uid}:{gid}",
         f"--volume={workdirs.cargo}:/cargo:rw",
         f"--volume={workdirs.rustup}:/rustup:rw",
-        "--network=host",
         args.docker_image,
     ]
     env = [
