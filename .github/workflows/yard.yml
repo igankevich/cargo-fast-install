@@ -30,7 +30,7 @@ on:
       docker-image:
         type: string
         required: false
-        default: "rust@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8"
+        default: "rust@sha256:ebc54bef33ec8f9a5cd05799366010f35efbb73b354fb4f2cb086ec6b9460ef5"
     outputs:
       archive:
         value: ${{ jobs.yarn-build.outputs.output1 }}
@@ -48,42 +48,7 @@ jobs:
         run: |
           curl -Lf -o yard https://github.com/igankevich/yard/raw/${{ github.workflow_sha }}/yard
           chmod +x yard
-      - name: Check DNS
-        run: |
-          set -ex
-          sudo systemctl status docker || true
-          ps aux | grep docker
-          ip -brief -color address
-          ip -brief -color link
-          ip -brief -color route
-          resolvectl status || true
-          # https://quad9.net/service/service-addresses-and-features/
-          cat >/tmp/resolv.conf << EOF
-          nameserver 9.9.9.9
-          nameserver 149.112.112.112
-          nameserver 2620:fe::fe
-          nameserver 2620:fe::9
-          EOF
-          sudo rm /etc/resolv.conf
-          sudo mv /tmp/resolv.conf /etc/resolv.conf
-          cat /etc/resolv.conf
-          echo ${{ job.container.network }}
-          docker run --rm ${{ inputs.docker-image }} cat /etc/resolv.conf
-          docker run --rm ${{ inputs.docker-image }} getent hosts static.rust-lang.org || true
-          docker run --rm ${{ inputs.docker-image }} ip -brief -color address
-          docker run --rm ${{ inputs.docker-image }} ip -brief -color link
-          docker run --rm ${{ inputs.docker-image }} ip -brief -color route
-          docker run --rm --network=host ${{ inputs.docker-image }} cat /etc/resolv.conf
-          docker run --rm --network=host ${{ inputs.docker-image }} getent hosts static.rust-lang.org || true
-          docker run --rm --network=host ${{ inputs.docker-image }} curl -Lfv https://static.rust-lang.org
       - name: Build `${{ inputs.crates }}` with `yard`
-        env:
-          # https://quad9.net/service/service-addresses-and-features/
-          YARD_DOCKER_DNS: >
-            9.9.9.9
-            149.112.112.112
-            2620:fe::fe
-            2620:fe::9
         run: |
           ./yard build \
             --rustup-version ${{ inputs.rustup-version }} \

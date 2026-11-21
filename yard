@@ -573,12 +573,6 @@ def generate_arguments(parser: ArgumentParser) -> None:
 
 
 def build_arguments(parser: ArgumentParser) -> None:
-    def default_docker_dns():
-        s = os.environ.get("YARD_DOCKER_DNS")
-        if s is None:
-            return []
-        return s.split()
-
     parser.add_argument(
         "crates",
         metavar="CRATE[@VERSION_OR_HASH]",
@@ -610,15 +604,9 @@ def build_arguments(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--docker-image",
         type=str,
-        default="rust@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8",
+        # TODO should be based on host architecture
+        default="rust@sha256:ebc54bef33ec8f9a5cd05799366010f35efbb73b354fb4f2cb086ec6b9460ef5",
         help="Docker image",
-    )
-    parser.add_argument(
-        "--docker-dns",
-        action="append",
-        type=str,
-        default=default_docker_dns(),
-        help="DNS servers that Docker sandbox uses",
     )
     parser.add_argument(
         "--registry",
@@ -1187,19 +1175,16 @@ def install_rust_toolchain(
     /rustup/rustup-init --yes --quiet --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" --default-host "$RUST_TARGET"
     rm /rustup/rustup-init /rustup/rustup-init-hash
     """
-    docker = (
-        [
-            "docker",
-            "run",
-            "--rm",
-            f"--user={uid}:{gid}",
-            f"--volume={workdirs.cargo}:/cargo:rw",
-            f"--volume={workdirs.rustup}:/rustup:rw",
-            "--network=host",
-        ]
-        + [arg for addr in args.docker_dns for arg in ["--dns", addr]]
-        + [args.docker_image]
-    )
+    docker = [
+        "docker",
+        "run",
+        "--rm",
+        f"--user={uid}:{gid}",
+        f"--volume={workdirs.cargo}:/cargo:rw",
+        f"--volume={workdirs.rustup}:/rustup:rw",
+        "--network=host",
+        args.docker_image,
+    ]
     env = [
         "/usr/bin/env",
         "-i",
