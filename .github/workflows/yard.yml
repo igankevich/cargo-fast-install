@@ -51,10 +51,16 @@ jobs:
       - name: Check DNS
         run: |
           set -ex
-          cat /etc/docker/daemon.json || true
+          # https://quad9.net/service/service-addresses-and-features/
+          cat >/etc/resolv.conf << EOF
+          nameserver 9.9.9.9
+          nameserver 149.112.112.112
+          nameserver 2620:fe::fe
+          nameserver 2620:fe::9
+          EOF
           cat /etc/resolv.conf
           docker run --rm ${{ inputs.docker-image }} cat /etc/resolv.conf
-          docker run --rm --add-host=host.docker.internal:host-gateway ${{ inputs.docker-image }} curl -Lfv https://static.rust-lang.org
+          docker run --rm ${{ inputs.docker-image }} curl -Lfv https://static.rust-lang.org
       - name: Build `${{ inputs.crates }}` with `yard`
         env:
           # https://quad9.net/service/service-addresses-and-features/
