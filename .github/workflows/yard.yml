@@ -54,7 +54,7 @@ jobs:
           ./yard build \
             ${rustup_version:+--rustup-version "$rustup_version"} \
             ${rustup_hash:+--rustup-hash "$rustup_hash"} \
-            ${rust_version:+--rust-version "$rust_version} \
+            ${rust_version:+--rust-version "$rust_version"} \
             ${docker_image:+--docker-image "$docker_image"} \
             ${target:+--target "$target"} \
             ${profile:+--profile "$profile"} \
