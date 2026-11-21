@@ -1195,6 +1195,7 @@ def install_rust_toolchain(
             f"--user={uid}:{gid}",
             f"--volume={workdirs.cargo}:/cargo:rw",
             f"--volume={workdirs.rustup}:/rustup:rw",
+            "--network=host",
         ]
         + [arg for addr in args.docker_dns for arg in ["--dns", addr]]
         + [args.docker_image]
