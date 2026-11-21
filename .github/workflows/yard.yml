@@ -51,6 +51,11 @@ jobs:
       - name: Check DNS
         run: |
           set -ex
+          sudo systemctl status docker || true
+          ps aux | grep docker
+          ip -brief -color address
+          ip -brief -color link
+          ip -brief -color route
           # https://quad9.net/service/service-addresses-and-features/
           sudo rm /etc/resolv.conf
           cat >/tmp/resolv.conf << EOF
