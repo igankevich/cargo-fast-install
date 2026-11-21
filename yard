@@ -591,7 +591,9 @@ def build_arguments(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--rustup-hash",
         type=str,
-        default="5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4",
+        # TODO should be based on host architecture
+        #default="5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4",
+        default="2ba97d668c06dc4b1884f2a3fa6f4cf14b9bd0c1db379af7e4f87a705ff19edd",
         help="`rustup-init` hash",
     )
     parser.add_argument(
