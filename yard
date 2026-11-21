@@ -531,7 +531,7 @@ def install_arguments(parser: ArgumentParser) -> None:
         "--registry",
         type=str,
         default=os.environ.get("YARD_REGISTRY") or "https://index.crates.io",
-        help="Cargo registry URL",
+        help="Cargo registry URL [env: YARD_REGISTRY]",
     )
     parser.add_argument(
         "--min-age",
@@ -576,7 +576,7 @@ def generate_arguments(parser: ArgumentParser) -> None:
 def build_arguments(parser: ArgumentParser) -> None:
     def default_rustup_hash():
         # https://github.com/rust-lang/docker-rust/blob/df656acca65532667d6df2bd6193457d9404bc02/x.py#L75
-        # curl https://static.rust-lang.org/rustup/archive/{rustup_version}/{arch}/rustup-init.sha256
+        # TLDR: curl https://static.rust-lang.org/rustup/archive/{rustup_version}/{arch}/rustup-init.sha256
         hashes = {
             "x86_64-unknown-linux-gnu": "5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4",
             "aarch64-unknown-linux-gnu": "9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282",
@@ -618,7 +618,7 @@ def build_arguments(parser: ArgumentParser) -> None:
         type=str,
         default=os.environ.get("YARD_RUSTUP_DIST_SERVER")
         or "https://static.rust-lang.org",
-        help="Rustup distribution server root URL",
+        help="Rustup distribution server root URL [env: YARD_RUSTUP_DIST_SERVER]",
     )
     parser.add_argument(
         "--docker-image",
@@ -630,7 +630,7 @@ def build_arguments(parser: ArgumentParser) -> None:
         "--registry",
         type=str,
         default=os.environ.get("YARD_REGISTRY") or "https://index.crates.io",
-        help="Cargo registry URL",
+        help="Cargo registry URL [env: YARD_REGISTRY]",
     )
 
 

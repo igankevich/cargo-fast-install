@@ -7,6 +7,10 @@ on:
       crates:
         type: string
         required: true
+      artifact-name:
+        type: string
+        required: true
+        default: yard-build-output
       target:
         type: string
         required: false
@@ -25,11 +29,6 @@ on:
       docker-image:
         type: string
         required: false
-    outputs:
-      archive:
-        value: ${{ jobs.yarn-build.outputs.output1 }}
-      provenance:
-        value: ${{ jobs.yarn-build.outputs.output2 }}
 
 jobs:
   yard-build:
@@ -60,8 +59,19 @@ jobs:
             ${profile:+--profile "$profile"} \
             ${{ inputs.crates }}
       - name: Attest artifacts
+        id: attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             archive.tar.gz
             provenance.json
+      - name: Upload artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.artifact-name }}
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            archive.tar.gz
+            provenance.json
+            ${{ steps.attest.outputs.bundle-path }}
