@@ -418,6 +418,7 @@ def guess_rust_host_target_triple() -> str:
             return f"{arch}-unknown-{system}"
 
 
+@cache
 def rust_host_target_triple() -> str:
     try:
         result = subprocess.run(
@@ -530,7 +531,7 @@ def install_arguments(parser: ArgumentParser) -> None:
         "--registry",
         type=str,
         default=os.environ.get("YARD_REGISTRY") or "https://index.crates.io",
-        help="Cargo registry URL",
+        help="Cargo registry URL [env: YARD_REGISTRY]",
     )
     parser.add_argument(
         "--min-age",
@@ -573,6 +574,24 @@ def generate_arguments(parser: ArgumentParser) -> None:
 
 
 def build_arguments(parser: ArgumentParser) -> None:
+    def default_rustup_hash():
+        # https://github.com/rust-lang/docker-rust/blob/df656acca65532667d6df2bd6193457d9404bc02/x.py#L75
+        # TLDR: curl https://static.rust-lang.org/rustup/archive/{rustup_version}/{arch}/rustup-init.sha256
+        hashes = {
+            "x86_64-unknown-linux-gnu": "5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4",
+            "aarch64-unknown-linux-gnu": "9f608c142e0e38a78957d0661ba1dfaf0b6fb37184cfaa4b9a0aa57af6184282",
+        }
+        return hashes.get(rust_host_target_triple())
+
+    def default_docker_image():
+        hashes = {
+            # amd64
+            "x86_64-unknown-linux-gnu": "buildpack-deps@sha256:cba7fa3c133e3110d747518182a10a8f969691e6788abea5f454ce7f83de1542",
+            # arm64-v8
+            "aarch64-unknown-linux-gnu": "buildpack-deps@sha256:f719cedddb6ca673716cb4564b9298bbaa7fea8b4ae8a78e4ead2b2299ed6c62",
+        }
+        return hashes.get(rust_host_target_triple())
+
     parser.add_argument(
         "crates",
         metavar="CRATE[@VERSION_OR_HASH]",
@@ -583,7 +602,7 @@ def build_arguments(parser: ArgumentParser) -> None:
     parser.add_argument("--target", type=str, default=None, help="Rust target triple")
     parser.add_argument("--profile", type=str, default="release", help="Cargo profile")
     parser.add_argument(
-        "--rust-version", type=str, default="1.99.1", help="Rust version"
+        "--rust-version", type=str, default="1.100.0", help="Rust version"
     )
     parser.add_argument(
         "--rustup-version", type=str, default="1.29.2", help="`rustup-init` version"
@@ -591,7 +610,7 @@ def build_arguments(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--rustup-hash",
         type=str,
-        default="5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4",
+        default=default_rustup_hash(),
         help="`rustup-init` hash",
     )
     parser.add_argument(
@@ -599,19 +618,19 @@ def build_arguments(parser: ArgumentParser) -> None:
         type=str,
         default=os.environ.get("YARD_RUSTUP_DIST_SERVER")
         or "https://static.rust-lang.org",
-        help="Rustup distribution server root URL",
+        help="Rustup distribution server root URL [env: YARD_RUSTUP_DIST_SERVER]",
     )
     parser.add_argument(
         "--docker-image",
         type=str,
-        default="rust@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137",
+        default=default_docker_image(),
         help="Docker image",
     )
     parser.add_argument(
         "--registry",
         type=str,
         default=os.environ.get("YARD_REGISTRY") or "https://index.crates.io",
-        help="Cargo registry URL",
+        help="Cargo registry URL [env: YARD_REGISTRY]",
     )
 
 
@@ -623,7 +642,8 @@ def parse_arguments() -> Namespace:
                 sys.exit(0)
 
     parser = argparse.ArgumentParser(
-        description="Fast and secure installation of Rust binaries"
+        description="Fast and secure installation of Rust binaries",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "-q", "--quiet", action="store_true", help="Produce less output"
@@ -633,11 +653,25 @@ def parse_arguments() -> Namespace:
         dest="subcommand", metavar="COMMAND", required=True
     )
     build_arguments(
-        subparsers.add_parser("build", help="Build Rust crate in a sandbox")
+        subparsers.add_parser(
+            "build",
+            help="Build Rust crate in a sandbox",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
     )
-    generate_arguments(subparsers.add_parser("generate", help="Generate archives"))
+    generate_arguments(
+        subparsers.add_parser(
+            "generate",
+            help="Generate archives",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
+    )
     install_arguments(
-        subparsers.add_parser("install", help="Install pre-built Rust binary")
+        subparsers.add_parser(
+            "install",
+            help="Install pre-built Rust binary",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
     )
     args = parser.parse_args()
     if args.version:
@@ -1174,32 +1208,34 @@ def install_rust_toolchain(
     /rustup/rustup-init --yes --quiet --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" --default-host "$RUST_TARGET"
     rm /rustup/rustup-init /rustup/rustup-init-hash
     """
-    subprocess.run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            f"--user={uid}:{gid}",
-            f"--volume={workdirs.cargo}:/cargo:rw",
-            f"--volume={workdirs.rustup}:/rustup:rw",
-            args.docker_image,
-            "/usr/bin/env",
-            "-i",
-            f"RUST_VERSION={args.rust_version}",
-            f"RUST_TARGET={target}",
-            "CARGO_HOME=/cargo",
-            "RUSTUP_HOME=/rustup",
-            f"RUSTUP_DIST_SERVER={args.rustup_dist_server}",
-            f"RUSTUP_VERSION={args.rustup_version}",
-            f"rustup_hash={args.rustup_hash}",
-            f"rustup_init_url={rustup_init_url}",
-            "PATH=/cargo/bin:/usr/bin",
-            "/bin/sh",
-            "-c",
-            rustup_script,
-        ],
-        check=True,
-    )
+    docker = [
+        "docker",
+        "run",
+        "--rm",
+        f"--user={uid}:{gid}",
+        f"--volume={workdirs.cargo}:/cargo:rw",
+        f"--volume={workdirs.rustup}:/rustup:rw",
+        args.docker_image,
+    ]
+    env = [
+        "/usr/bin/env",
+        "-i",
+        f"RUST_VERSION={args.rust_version}",
+        f"RUST_TARGET={target}",
+        "CARGO_HOME=/cargo",
+        "RUSTUP_HOME=/rustup",
+        f"RUSTUP_DIST_SERVER={args.rustup_dist_server}",
+        f"RUSTUP_VERSION={args.rustup_version}",
+        f"rustup_hash={args.rustup_hash}",
+        f"rustup_init_url={rustup_init_url}",
+        "PATH=/cargo/bin:/usr/bin",
+    ]
+    sh = [
+        "/bin/sh",
+        "-c",
+        rustup_script,
+    ]
+    subprocess.run(docker + env + sh, check=True)
 
 
 class CrateDirs:

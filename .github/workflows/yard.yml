@@ -1,0 +1,79 @@
+---
+name: Build Rust crates with `yard`
+
+on:
+  workflow_call:
+    inputs:
+      crates:
+        type: string
+        required: true
+      artifact-name:
+        type: string
+        required: false
+        default: yard-build-output
+      target:
+        type: string
+        required: false
+      profile:
+        type: string
+        required: false
+      rustup-version:
+        type: string
+        required: false
+      rustup-hash:
+        type: string
+        required: false
+      rust-version:
+        type: string
+        required: false
+      docker-image:
+        type: string
+        required: false
+
+jobs:
+  yard-build:
+    runs-on: ubuntu-26.04
+    outputs:
+      archive: ${{ steps.step1.outputs.firstword }}
+      provenance: ${{ steps.step2.outputs.secondword }}
+    steps:
+      - name: Install `yard`
+        run: |
+          curl -Lf -o yard https://github.com/igankevich/yard/raw/${{ github.workflow_sha }}/yard
+          chmod +x yard
+      - name: Build `${{ inputs.crates }}` with `yard`
+        env:
+          target: ${{ inputs.target }}
+          profile: ${{ inputs.profile }}
+          rustup_version: ${{ inputs.rustup-version }}
+          rustup_hash: ${{ inputs.rustup-hash }}
+          rust_version: ${{ inputs.rust-version }}
+          docker_image: ${{ inputs.docker-image }}
+        run: |
+          ./yard build \
+            ${rustup_version:+--rustup-version "$rustup_version"} \
+            ${rustup_hash:+--rustup-hash "$rustup_hash"} \
+            ${rust_version:+--rust-version "$rust_version"} \
+            ${docker_image:+--docker-image "$docker_image"} \
+            ${target:+--target "$target"} \
+            ${profile:+--profile "$profile"} \
+            ${{ inputs.crates }}
+      - name: Attest artifacts
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            archive.tar.gz
+            provenance.json
+      - name: Copy attestation
+        run: cp ${{ steps.attest.outputs.bundle-path }} attestation.json
+      - name: Upload artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.artifact-name }}
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            archive.tar.gz
+            provenance.json
+            attestation.json

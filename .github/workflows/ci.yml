@@ -1,16 +1,20 @@
 ---
-name: CI
+name: Test yard
+
 on:
   push:
     branches: [master]
     tags: ['*']
   pull_request:
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref
     }}
   cancel-in-progress: true
+
 env:
   PYTHON_VERSION: "3.15"
+
 jobs:
   check:
     runs-on: ubuntu-latest
