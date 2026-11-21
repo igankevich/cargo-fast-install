@@ -573,6 +573,12 @@ def generate_arguments(parser: ArgumentParser) -> None:
 
 
 def build_arguments(parser: ArgumentParser) -> None:
+    def default_docker_dns():
+        s = os.environ.get("YARD_DOCKER_DNS")
+        if s is None:
+            return []
+        return s.split()
+
     parser.add_argument(
         "crates",
         metavar="CRATE[@VERSION_OR_HASH]",
@@ -606,6 +612,13 @@ def build_arguments(parser: ArgumentParser) -> None:
         type=str,
         default="rust@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137",
         help="Docker image",
+    )
+    parser.add_argument(
+        "--docker-dns",
+        action="append",
+        type=str,
+        default=default_docker_dns(),
+        help="DNS servers that Docker sandbox uses",
     )
     parser.add_argument(
         "--registry",
@@ -1174,7 +1187,7 @@ def install_rust_toolchain(
     /rustup/rustup-init --yes --quiet --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION" --default-host "$RUST_TARGET"
     rm /rustup/rustup-init /rustup/rustup-init-hash
     """
-    subprocess.run(
+    docker = (
         [
             "docker",
             "run",
@@ -1182,24 +1195,29 @@ def install_rust_toolchain(
             f"--user={uid}:{gid}",
             f"--volume={workdirs.cargo}:/cargo:rw",
             f"--volume={workdirs.rustup}:/rustup:rw",
-            args.docker_image,
-            "/usr/bin/env",
-            "-i",
-            f"RUST_VERSION={args.rust_version}",
-            f"RUST_TARGET={target}",
-            "CARGO_HOME=/cargo",
-            "RUSTUP_HOME=/rustup",
-            f"RUSTUP_DIST_SERVER={args.rustup_dist_server}",
-            f"RUSTUP_VERSION={args.rustup_version}",
-            f"rustup_hash={args.rustup_hash}",
-            f"rustup_init_url={rustup_init_url}",
-            "PATH=/cargo/bin:/usr/bin",
-            "/bin/sh",
-            "-c",
-            rustup_script,
-        ],
-        check=True,
+        ]
+        + [arg for arg in ["--dns", addr] for addr in args.docker_dns]
+        + [args.docker_image]
     )
+    env = [
+        "/usr/bin/env",
+        "-i",
+        f"RUST_VERSION={args.rust_version}",
+        f"RUST_TARGET={target}",
+        "CARGO_HOME=/cargo",
+        "RUSTUP_HOME=/rustup",
+        f"RUSTUP_DIST_SERVER={args.rustup_dist_server}",
+        f"RUSTUP_VERSION={args.rustup_version}",
+        f"rustup_hash={args.rustup_hash}",
+        f"rustup_init_url={rustup_init_url}",
+        "PATH=/cargo/bin:/usr/bin",
+    ]
+    sh = [
+        "/bin/sh",
+        "-c",
+        rustup_script,
+    ]
+    subprocess.run(docker + env + sh, check=True)
 
 
 class CrateDirs:
