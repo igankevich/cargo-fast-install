@@ -19,6 +19,10 @@ on:
         type: string
         required: false
         default: "1.29.2"
+      rustup-hash:
+        type: string
+        required: false
+        default: "5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4"
       rust-version:
         type: string
         required: false
