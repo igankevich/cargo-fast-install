@@ -52,12 +52,14 @@ jobs:
         run: |
           set -ex
           # https://quad9.net/service/service-addresses-and-features/
-          cat >/etc/resolv.conf << EOF
+          sudo rm /etc/resolv.conf
+          cat >/tmp/resolv.conf << EOF
           nameserver 9.9.9.9
           nameserver 149.112.112.112
           nameserver 2620:fe::fe
           nameserver 2620:fe::9
           EOF
+          sudo mv /tmp/resolv.conf /etc/resolv.conf
           cat /etc/resolv.conf
           docker run --rm ${{ inputs.docker-image }} cat /etc/resolv.conf
           docker run --rm ${{ inputs.docker-image }} curl -Lfv https://static.rust-lang.org
