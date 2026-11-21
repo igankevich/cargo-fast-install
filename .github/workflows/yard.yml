@@ -49,13 +49,6 @@ jobs:
           curl -Lf -o yard https://github.com/igankevich/yard/raw/${{ github.workflow_sha }}/yard
           chmod +x yard
       - name: Build `${{ inputs.crates }}` with `yard`
-        env:
-          # https://quad9.net/service/service-addresses-and-features/
-          YARD_DOCKER_DNS: >
-            9.9.9.9
-            149.112.112.112
-            2620:fe::fe
-            2620:fe::9
         run: |
           ./yard build \
             --rustup-version ${{ inputs.rustup-version }} \
