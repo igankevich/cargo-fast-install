@@ -30,7 +30,7 @@ on:
       docker-image:
         type: string
         required: false
-        default: "rust@sha256:008bfe041b07bc2d5c7352c4d6be01275306f77ab31a82b3b6111ee3b35054df"
+        default: "rust@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8"
     outputs:
       archive:
         value: ${{ jobs.yarn-build.outputs.output1 }}
