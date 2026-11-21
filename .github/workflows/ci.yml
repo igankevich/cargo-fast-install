@@ -16,6 +16,14 @@ env:
   PYTHON_VERSION: "3.15"
 
 jobs:
+  check-docker:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Check docker DNS
+        run: |
+          set -ex
+          docker run --rm rust@sha256:008bfe041b07bc2d5c7352c4d6be01275306f77ab31a82b3b6111ee3b35054df curl -Lfv https://static.rust-lang.org || true
+          docker run --rm --network=host rust@sha256:008bfe041b07bc2d5c7352c4d6be01275306f77ab31a82b3b6111ee3b35054df curl -Lfv https://static.rust-lang.org || true
   check:
     runs-on: ubuntu-latest
     steps:
