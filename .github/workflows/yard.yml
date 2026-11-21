@@ -9,7 +9,7 @@ on:
         required: true
       artifact-name:
         type: string
-        required: true
+        required: false
         default: yard-build-output
       target:
         type: string
